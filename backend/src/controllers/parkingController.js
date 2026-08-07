@@ -1,9 +1,8 @@
 const supabase = require('../config/supabaseClient');
+const { createNotification } = require('./notificationController');
 
 // ------------------------------------------------------------
 // GET /api/parking/availability
-// Returns how many spaces are available/occupied/disabled,
-// plus the list of currently available spaces.
 // ------------------------------------------------------------
 async function getAvailability(req, res) {
   try {
@@ -33,7 +32,6 @@ async function getAvailability(req, res) {
 // ------------------------------------------------------------
 // POST /api/parking/session/start
 // Body: { user_id, parking_space_id }
-// Creates a session and marks the space as occupied.
 // ------------------------------------------------------------
 async function createSession(req, res) {
   try {
@@ -43,7 +41,6 @@ async function createSession(req, res) {
       return res.status(400).json({ error: 'user_id and parking_space_id are required' });
     }
 
-    // Confirm the space exists and is actually available before booking it
     const { data: space, error: spaceError } = await supabase
       .from('parking_spaces')
       .select('id, status')
@@ -66,13 +63,24 @@ async function createSession(req, res) {
 
     if (sessionError) throw sessionError;
 
-    // Mark the space as occupied now that a session has started
     const { error: updateError } = await supabase
       .from('parking_spaces')
       .update({ status: 'occupied', updated_at: new Date().toISOString() })
       .eq('id', parking_space_id);
 
     if (updateError) throw updateError;
+
+    // Let the driver know their session has started.
+    // Wrapped so that a notification failure never breaks the actual booking.
+    try {
+      await createNotification(
+        user_id,
+        `Your parking session has started at bay ${parking_space_id}.`,
+        'session_started'
+      );
+    } catch (notifyErr) {
+      console.error('Notification failed (non-blocking):', notifyErr.message);
+    }
 
     res.status(201).json({ session });
   } catch (err) {
@@ -84,7 +92,6 @@ async function createSession(req, res) {
 // ------------------------------------------------------------
 // POST /api/parking/session/end
 // Body: { session_id }
-// Closes the session, frees up the space, and calculates a fee.
 // ------------------------------------------------------------
 async function endSession(req, res) {
   try {
@@ -96,7 +103,7 @@ async function endSession(req, res) {
 
     const { data: session, error: fetchError } = await supabase
       .from('parking_sessions')
-      .select('id, parking_space_id, entry_time, session_status')
+      .select('id, user_id, parking_space_id, entry_time, session_status')
       .eq('id', session_id)
       .maybeSingle();
 
@@ -112,7 +119,6 @@ async function endSession(req, res) {
     const entryTime = new Date(session.entry_time);
     const minutesParked = Math.max(1, Math.round((exitTime - entryTime) / 60000));
 
-    // Simple flat rate example - swap in your team's actual pricing logic
     const RATE_PER_HOUR = 10;
     const feeAmount = Math.round((minutesParked / 60) * RATE_PER_HOUR * 100) / 100;
 
@@ -129,13 +135,22 @@ async function endSession(req, res) {
 
     if (updateError) throw updateError;
 
-    // Free up the parking space again
     const { error: spaceError } = await supabase
       .from('parking_spaces')
       .update({ status: 'available', updated_at: new Date().toISOString() })
       .eq('id', session.parking_space_id);
 
     if (spaceError) throw spaceError;
+
+    try {
+      await createNotification(
+        session.user_id,
+        `Your parking session has ended. Fee: R${feeAmount}.`,
+        'session_ended'
+      );
+    } catch (notifyErr) {
+      console.error('Notification failed (non-blocking):', notifyErr.message);
+    }
 
     res.json({ session: updatedSession });
   } catch (err) {
