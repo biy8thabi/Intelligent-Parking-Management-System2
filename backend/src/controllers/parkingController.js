@@ -35,10 +35,12 @@ async function getAvailability(req, res) {
 // ------------------------------------------------------------
 async function createSession(req, res) {
   try {
-    const { user_id, parking_space_id } = req.body;
+    const { user_id, parking_space_id, vehicle_registration_number } = req.body;
 
-    if (!user_id || !parking_space_id) {
-      return res.status(400).json({ error: 'user_id and parking_space_id are required' });
+    if (!user_id || !parking_space_id || !vehicle_registration_number) {
+      return res.status(400).json({
+        error: 'user_id, parking_space_id and vehicle_registration_number are required',
+      });
     }
 
     const { data: space, error: spaceError } = await supabase
@@ -57,7 +59,12 @@ async function createSession(req, res) {
 
     const { data: session, error: sessionError } = await supabase
       .from('parking_sessions')
-      .insert([{ user_id, parking_space_id, session_status: 'active' }])
+      .insert([{
+        user_id,
+        parking_space_id,
+        vehicle_registration_number,
+        session_status: 'active',
+      }])
       .select()
       .single();
 

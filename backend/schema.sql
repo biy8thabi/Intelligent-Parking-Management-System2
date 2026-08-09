@@ -53,6 +53,7 @@ create table parking_sessions (
   user_id           uuid not null references users(id) on delete cascade,
   parking_space_id  uuid not null references parking_spaces(id) on delete restrict,
   entry_time        timestamptz not null default now(),
+  vehicle_registration_number  text not null,
   exit_time         timestamptz,
   fee_amount        numeric(10, 2),
   payment_status    text not null default 'unpaid'
