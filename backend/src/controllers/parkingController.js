@@ -97,6 +97,75 @@ async function createSession(req, res) {
 }
 
 // ------------------------------------------------------------
+// Shared core logic for ending a session - used by both the normal
+// driver-facing endSession endpoint AND the admin force-end endpoint,
+// so the fee calculation / space release / notification logic only
+// lives in one place.
+//
+// notifyMessagePrefix lets the admin version send a different wording
+// ("ended by an admin") so the driver isn't confused into thinking
+// they ended it themselves.
+// ------------------------------------------------------------
+async function endSessionCore(session_id, notifyMessagePrefix = 'Your parking session has ended.') {
+  const { data: session, error: fetchError } = await supabase
+    .from('parking_sessions')
+    .select('id, user_id, parking_space_id, entry_time, session_status')
+    .eq('id', session_id)
+    .maybeSingle();
+
+  if (fetchError) throw fetchError;
+  if (!session) {
+    const err = new Error('Session not found');
+    err.statusCode = 404;
+    throw err;
+  }
+  if (session.session_status === 'completed') {
+    const err = new Error('This session has already ended');
+    err.statusCode = 409;
+    throw err;
+  }
+
+  const exitTime = new Date();
+  const entryTime = new Date(session.entry_time);
+  const minutesParked = Math.max(1, Math.round((exitTime - entryTime) / 60000));
+
+  const RATE_PER_HOUR = 10;
+  const feeAmount = Math.round((minutesParked / 60) * RATE_PER_HOUR * 100) / 100;
+
+  const { data: updatedSession, error: updateError } = await supabase
+    .from('parking_sessions')
+    .update({
+      exit_time: exitTime.toISOString(),
+      session_status: 'completed',
+      fee_amount: feeAmount,
+    })
+    .eq('id', session_id)
+    .select()
+    .single();
+
+  if (updateError) throw updateError;
+
+  const { error: spaceError } = await supabase
+    .from('parking_spaces')
+    .update({ status: 'available', updated_at: new Date().toISOString() })
+    .eq('id', session.parking_space_id);
+
+  if (spaceError) throw spaceError;
+
+  try {
+    await createNotification(
+      session.user_id,
+      `${notifyMessagePrefix} Fee: R${feeAmount}.`,
+      'session_ended'
+    );
+  } catch (notifyErr) {
+    console.error('Notification failed (non-blocking):', notifyErr.message);
+  }
+
+  return updatedSession;
+}
+
+// ------------------------------------------------------------
 // POST /api/parking/session/end
 // Body: { session_id }
 // ------------------------------------------------------------
@@ -108,62 +177,12 @@ async function endSession(req, res) {
       return res.status(400).json({ error: 'session_id is required' });
     }
 
-    const { data: session, error: fetchError } = await supabase
-      .from('parking_sessions')
-      .select('id, user_id, parking_space_id, entry_time, session_status')
-      .eq('id', session_id)
-      .maybeSingle();
-
-    if (fetchError) throw fetchError;
-    if (!session) {
-      return res.status(404).json({ error: 'Session not found' });
-    }
-    if (session.session_status === 'completed') {
-      return res.status(409).json({ error: 'This session has already ended' });
-    }
-
-    const exitTime = new Date();
-    const entryTime = new Date(session.entry_time);
-    const minutesParked = Math.max(1, Math.round((exitTime - entryTime) / 60000));
-
-    const RATE_PER_HOUR = 10;
-    const feeAmount = Math.round((minutesParked / 60) * RATE_PER_HOUR * 100) / 100;
-
-    const { data: updatedSession, error: updateError } = await supabase
-      .from('parking_sessions')
-      .update({
-        exit_time: exitTime.toISOString(),
-        session_status: 'completed',
-        fee_amount: feeAmount,
-      })
-      .eq('id', session_id)
-      .select()
-      .single();
-
-    if (updateError) throw updateError;
-
-    const { error: spaceError } = await supabase
-      .from('parking_spaces')
-      .update({ status: 'available', updated_at: new Date().toISOString() })
-      .eq('id', session.parking_space_id);
-
-    if (spaceError) throw spaceError;
-
-    try {
-      await createNotification(
-        session.user_id,
-        `Your parking session has ended. Fee: R${feeAmount}.`,
-        'session_ended'
-      );
-    } catch (notifyErr) {
-      console.error('Notification failed (non-blocking):', notifyErr.message);
-    }
-
+    const updatedSession = await endSessionCore(session_id);
     res.json({ session: updatedSession });
   } catch (err) {
     console.error('endSession error:', err.message);
-    res.status(500).json({ error: 'Could not end parking session' });
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Could not end parking session' });
   }
 }
 
-module.exports = { getAvailability, createSession, endSession };
+module.exports = { getAvailability, createSession, endSession, endSessionCore };
