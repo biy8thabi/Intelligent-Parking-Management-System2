@@ -31,7 +31,6 @@ async function getAvailability(req, res) {
 
 // ------------------------------------------------------------
 // POST /api/parking/session/start
-// Body: { user_id, parking_space_id }
 // ------------------------------------------------------------
 async function createSession(req, res) {
   try {
@@ -77,8 +76,6 @@ async function createSession(req, res) {
 
     if (updateError) throw updateError;
 
-    // Let the driver know their session has started.
-    // Wrapped so that a notification failure never breaks the actual booking.
     try {
       await createNotification(
         user_id,
@@ -97,14 +94,60 @@ async function createSession(req, res) {
 }
 
 // ------------------------------------------------------------
-// Shared core logic for ending a session - used by both the normal
-// driver-facing endSession endpoint AND the admin force-end endpoint,
-// so the fee calculation / space release / notification logic only
-// lives in one place.
-//
-// notifyMessagePrefix lets the admin version send a different wording
-// ("ended by an admin") so the driver isn't confused into thinking
-// they ended it themselves.
+// GET /api/parking/session/active/:user_id  (requires auth)
+// Returns the driver's current active session, if any - the driver
+// app can poll/check this on launch to know whether to show a
+// "currently parked" screen or the normal booking screen.
+// ------------------------------------------------------------
+async function getActiveSessionForUser(req, res) {
+  try {
+    const { user_id } = req.params;
+
+    const { data: session, error } = await supabase
+      .from('parking_sessions')
+      .select('*')
+      .eq('user_id', user_id)
+      .eq('session_status', 'active')
+      .maybeSingle();
+
+    if (error) throw error;
+
+    // No active session isn't an error - it just means the driver
+    // isn't currently parked anywhere. Return null rather than 404
+    // so the app can treat "no session" as a normal case.
+    res.json({ active_session: session || null });
+  } catch (err) {
+    console.error('getActiveSessionForUser error:', err.message);
+    res.status(500).json({ error: 'Could not fetch active session' });
+  }
+}
+
+// ------------------------------------------------------------
+// GET /api/parking/history/:user_id  (requires auth)
+// Returns a driver's past (completed) sessions, most recent first.
+// ------------------------------------------------------------
+async function getSessionHistory(req, res) {
+  try {
+    const { user_id } = req.params;
+
+    const { data: sessions, error } = await supabase
+      .from('parking_sessions')
+      .select('*')
+      .eq('user_id', user_id)
+      .eq('session_status', 'completed')
+      .order('exit_time', { ascending: false });
+
+    if (error) throw error;
+
+    res.json({ history: sessions });
+  } catch (err) {
+    console.error('getSessionHistory error:', err.message);
+    res.status(500).json({ error: 'Could not fetch parking history' });
+  }
+}
+
+// ------------------------------------------------------------
+// Shared core logic for ending a session.
 // ------------------------------------------------------------
 async function endSessionCore(session_id, notifyMessagePrefix = 'Your parking session has ended.') {
   const { data: session, error: fetchError } = await supabase
@@ -167,7 +210,6 @@ async function endSessionCore(session_id, notifyMessagePrefix = 'Your parking se
 
 // ------------------------------------------------------------
 // POST /api/parking/session/end
-// Body: { session_id }
 // ------------------------------------------------------------
 async function endSession(req, res) {
   try {
@@ -185,4 +227,11 @@ async function endSession(req, res) {
   }
 }
 
-module.exports = { getAvailability, createSession, endSession, endSessionCore };
+module.exports = {
+  getAvailability,
+  createSession,
+  endSession,
+  endSessionCore,
+  getActiveSessionForUser,
+  getSessionHistory,
+};

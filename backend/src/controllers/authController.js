@@ -2,18 +2,14 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const supabase = require('../config/supabaseClient');
 
-// How many salt rounds bcrypt uses when hashing passwords.
-// 10 is a solid, commonly-used default - more rounds = more secure but slower.
 const SALT_ROUNDS = 10;
 
-// Helper: creates a signed JWT for a given user/admin id.
-// The token is what the app sends back on later requests to prove who's logged in.
 function generateToken(id, role) {
   return jwt.sign({ id, role }, process.env.JWT_SECRET, { expiresIn: '7d' });
 }
 
 // ------------------------------------------------------------
-// POST /api/auth/register  (driver signs up)
+// POST /api/auth/register
 // ------------------------------------------------------------
 async function registerUser(req, res) {
   try {
@@ -23,7 +19,6 @@ async function registerUser(req, res) {
       return res.status(400).json({ error: 'full_name, email and password are required' });
     }
 
-    // Check the email isn't already taken
     const { data: existing } = await supabase
       .from('users')
       .select('id')
@@ -53,7 +48,7 @@ async function registerUser(req, res) {
 }
 
 // ------------------------------------------------------------
-// POST /api/auth/login  (driver logs in)
+// POST /api/auth/login
 // ------------------------------------------------------------
 async function loginUser(req, res) {
   try {
@@ -91,7 +86,7 @@ async function loginUser(req, res) {
 }
 
 // ------------------------------------------------------------
-// POST /api/auth/admin-login  (facility staff log in on the web portal)
+// POST /api/auth/admin-login
 // ------------------------------------------------------------
 async function loginAdmin(req, res) {
   try {
@@ -128,4 +123,39 @@ async function loginAdmin(req, res) {
   }
 }
 
-module.exports = { registerUser, loginUser, loginAdmin };
+// ------------------------------------------------------------
+// GET /api/auth/me  (requires auth)
+// Returns the profile of whoever the token belongs to.
+// Uses req.auth (set by the requireAuth middleware) rather than a
+// param, so a driver can only ever fetch their OWN profile - never
+// someone else's by guessing an id in the URL.
+// ------------------------------------------------------------
+async function getProfile(req, res) {
+  try {
+    const { id, role } = req.auth;
+
+    // Admin tokens and user tokens point at different tables
+    const table = role === 'admin' ? 'admins' : 'users';
+    const columns = role === 'admin'
+      ? 'id, full_name, email, role, created_at'
+      : 'id, full_name, email, phone_number, created_at';
+
+    const { data: profile, error } = await supabase
+      .from(table)
+      .select(columns)
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!profile) {
+      return res.status(404).json({ error: 'Profile not found' });
+    }
+
+    res.json({ [role === 'admin' ? 'admin' : 'user']: profile });
+  } catch (err) {
+    console.error('getProfile error:', err.message);
+    res.status(500).json({ error: 'Could not fetch profile' });
+  }
+}
+
+module.exports = { registerUser, loginUser, loginAdmin, getProfile };

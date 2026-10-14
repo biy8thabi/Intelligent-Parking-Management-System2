@@ -1,14 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const { registerUser, loginUser, loginAdmin } = require('../controllers/authController');
+const { requireAuth } = require('../middleware/authMiddleware');
+const { registerUser, loginUser, loginAdmin, getProfile } = require('../controllers/authController');
 
-// POST /api/auth/register
 router.post('/register', registerUser);
-
-// POST /api/auth/login
 router.post('/login', loginUser);
-
-// POST /api/auth/admin-login
 router.post('/admin-login', loginAdmin);
+
+// GET /api/auth/me - requires auth, returns whoever the token belongs to
+router.get('/me', requireAuth, getProfile);
 
 module.exports = router;
