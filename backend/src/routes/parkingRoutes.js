@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth } = require('../middleware/authMiddleware');
+const { requireAuth, requireSelf } = require('../middleware/authMiddleware');
 const {
   getAvailability,
   createSession,
@@ -12,16 +12,16 @@ const {
 // GET /api/parking/availability - public
 router.get('/availability', getAvailability);
 
-// POST /api/parking/session/start - requires auth
+// POST /api/parking/session/start - logged in; body user_id must be yours
 router.post('/session/start', requireAuth, createSession);
 
-// POST /api/parking/session/end - requires auth
+// POST /api/parking/session/end - logged in; session must be yours
 router.post('/session/end', requireAuth, endSession);
 
-// GET /api/parking/session/active/:user_id - requires auth
-router.get('/session/active/:user_id', requireAuth, getActiveSessionForUser);
+// GET /api/parking/session/active/:user_id - must be your own id (or admin)
+router.get('/session/active/:user_id', requireSelf('user_id'), getActiveSessionForUser);
 
-// GET /api/parking/history/:user_id - requires auth
-router.get('/history/:user_id', requireAuth, getSessionHistory);
+// GET /api/parking/history/:user_id - must be your own id (or admin)
+router.get('/history/:user_id', requireSelf('user_id'), getSessionHistory);
 
 module.exports = router;

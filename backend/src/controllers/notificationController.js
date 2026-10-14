@@ -1,8 +1,7 @@
 const supabase = require('../config/supabaseClient');
+const { isOwnerOrAdmin } = require('../middleware/authMiddleware');
 
-// Internal helper - other controllers (e.g. parkingController) can call
-// this directly to create a notification without going through the API.
-// Example: notify a driver once their session/ticket is ready.
+// Internal helper used by other controllers to create a notification.
 async function createNotification(user_id, message, type = 'general') {
   const { data, error } = await supabase
     .from('notifications')
@@ -16,7 +15,7 @@ async function createNotification(user_id, message, type = 'general') {
 
 // ------------------------------------------------------------
 // GET /api/notifications/:user_id
-// Returns all notifications for a driver, newest first.
+// (route-level requireSelf confirms the caller owns :user_id)
 // ------------------------------------------------------------
 async function getNotifications(req, res) {
   try {
@@ -39,11 +38,25 @@ async function getNotifications(req, res) {
 
 // ------------------------------------------------------------
 // PATCH /api/notifications/:id/read
-// Marks a single notification as read.
+// Only the notification's owner (or an admin) can mark it as read.
 // ------------------------------------------------------------
 async function markAsRead(req, res) {
   try {
     const { id } = req.params;
+
+    const { data: existing, error: fetchError } = await supabase
+      .from('notifications')
+      .select('id, user_id')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (fetchError) throw fetchError;
+    if (!existing) {
+      return res.status(404).json({ error: 'Notification not found' });
+    }
+    if (!isOwnerOrAdmin(req, existing.user_id)) {
+      return res.status(403).json({ error: 'You can only update your own notifications' });
+    }
 
     const { data: notification, error } = await supabase
       .from('notifications')
@@ -53,9 +66,6 @@ async function markAsRead(req, res) {
       .single();
 
     if (error) throw error;
-    if (!notification) {
-      return res.status(404).json({ error: 'Notification not found' });
-    }
 
     res.json({ notification });
   } catch (err) {

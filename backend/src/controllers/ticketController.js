@@ -1,10 +1,8 @@
 const crypto = require('crypto');
 const QRCode = require('qrcode');
 const supabase = require('../config/supabaseClient');
+const { isOwnerOrAdmin } = require('../middleware/authMiddleware');
 
-// Creates a short, unique, human-readable ticket code, e.g. "TCK-9F3A2B1C"
-// This is what gets encoded into the QR image and can also be typed in
-// manually if a QR scanner isn't available.
 function generateTicketCode() {
   const randomPart = crypto.randomBytes(4).toString('hex').toUpperCase();
   return `TCK-${randomPart}`;
@@ -13,8 +11,7 @@ function generateTicketCode() {
 // ------------------------------------------------------------
 // POST /api/tickets/generate
 // Body: { session_id }
-// Creates a ticket for an existing parking session, with a QR code
-// image (as a base64 data URL) that the driver app can display.
+// The session must belong to the logged-in driver (or caller is admin).
 // ------------------------------------------------------------
 async function generateTicket(req, res) {
   try {
@@ -24,10 +21,9 @@ async function generateTicket(req, res) {
       return res.status(400).json({ error: 'session_id is required' });
     }
 
-    // Confirm the session actually exists first
     const { data: session, error: sessionError } = await supabase
       .from('parking_sessions')
-      .select('id')
+      .select('id, user_id')
       .eq('id', session_id)
       .maybeSingle();
 
@@ -35,12 +31,11 @@ async function generateTicket(req, res) {
     if (!session) {
       return res.status(404).json({ error: 'Session not found' });
     }
+    if (!isOwnerOrAdmin(req, session.user_id)) {
+      return res.status(403).json({ error: 'You can only generate tickets for your own sessions' });
+    }
 
     const ticket_code = generateTicketCode();
-
-    // Encode the ticket code into a scannable QR image.
-    // This returns a base64 data URL your frontend can drop straight
-    // into an <img> tag - no separate image file needed.
     const qr_code_url = await QRCode.toDataURL(ticket_code);
 
     const { data: ticket, error: ticketError } = await supabase
@@ -60,11 +55,25 @@ async function generateTicket(req, res) {
 
 // ------------------------------------------------------------
 // GET /api/tickets/:session_id
-// Fetches the ticket for a given session (e.g. to redisplay it later).
+// Same ownership rule: only the session's owner (or an admin).
 // ------------------------------------------------------------
 async function getTicketBySession(req, res) {
   try {
     const { session_id } = req.params;
+
+    const { data: session, error: sessionError } = await supabase
+      .from('parking_sessions')
+      .select('id, user_id')
+      .eq('id', session_id)
+      .maybeSingle();
+
+    if (sessionError) throw sessionError;
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+    if (!isOwnerOrAdmin(req, session.user_id)) {
+      return res.status(403).json({ error: 'You can only view tickets for your own sessions' });
+    }
 
     const { data: ticket, error } = await supabase
       .from('tickets')

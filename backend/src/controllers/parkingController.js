@@ -1,5 +1,6 @@
 const supabase = require('../config/supabaseClient');
 const { createNotification } = require('./notificationController');
+const { isOwnerOrAdmin } = require('../middleware/authMiddleware');
 
 // ------------------------------------------------------------
 // GET /api/parking/availability
@@ -31,6 +32,8 @@ async function getAvailability(req, res) {
 
 // ------------------------------------------------------------
 // POST /api/parking/session/start
+// The user_id in the body must match the logged-in driver, so a
+// driver can't start sessions on someone else's account.
 // ------------------------------------------------------------
 async function createSession(req, res) {
   try {
@@ -40,6 +43,10 @@ async function createSession(req, res) {
       return res.status(400).json({
         error: 'user_id, parking_space_id and vehicle_registration_number are required',
       });
+    }
+
+    if (!isOwnerOrAdmin(req, user_id)) {
+      return res.status(403).json({ error: 'You can only start sessions for your own account' });
     }
 
     const { data: space, error: spaceError } = await supabase
@@ -94,10 +101,8 @@ async function createSession(req, res) {
 }
 
 // ------------------------------------------------------------
-// GET /api/parking/session/active/:user_id  (requires auth)
-// Returns the driver's current active session, if any - the driver
-// app can poll/check this on launch to know whether to show a
-// "currently parked" screen or the normal booking screen.
+// GET /api/parking/session/active/:user_id
+// (route-level requireSelf already confirms the caller owns :user_id)
 // ------------------------------------------------------------
 async function getActiveSessionForUser(req, res) {
   try {
@@ -112,9 +117,6 @@ async function getActiveSessionForUser(req, res) {
 
     if (error) throw error;
 
-    // No active session isn't an error - it just means the driver
-    // isn't currently parked anywhere. Return null rather than 404
-    // so the app can treat "no session" as a normal case.
     res.json({ active_session: session || null });
   } catch (err) {
     console.error('getActiveSessionForUser error:', err.message);
@@ -123,8 +125,7 @@ async function getActiveSessionForUser(req, res) {
 }
 
 // ------------------------------------------------------------
-// GET /api/parking/history/:user_id  (requires auth)
-// Returns a driver's past (completed) sessions, most recent first.
+// GET /api/parking/history/:user_id
 // ------------------------------------------------------------
 async function getSessionHistory(req, res) {
   try {
@@ -147,9 +148,17 @@ async function getSessionHistory(req, res) {
 }
 
 // ------------------------------------------------------------
-// Shared core logic for ending a session.
+// Shared core logic for ending a session. Used by the driver's
+// endSession and the admin force-end.
+//
+// requesterId: when set, the session must belong to that user,
+// otherwise a 403 is thrown. The admin force-end leaves it unset.
 // ------------------------------------------------------------
-async function endSessionCore(session_id, notifyMessagePrefix = 'Your parking session has ended.') {
+async function endSessionCore(
+  session_id,
+  notifyMessagePrefix = 'Your parking session has ended.',
+  requesterId = null
+) {
   const { data: session, error: fetchError } = await supabase
     .from('parking_sessions')
     .select('id, user_id, parking_space_id, entry_time, session_status')
@@ -160,6 +169,11 @@ async function endSessionCore(session_id, notifyMessagePrefix = 'Your parking se
   if (!session) {
     const err = new Error('Session not found');
     err.statusCode = 404;
+    throw err;
+  }
+  if (requesterId && session.user_id !== requesterId) {
+    const err = new Error('You can only end your own sessions');
+    err.statusCode = 403;
     throw err;
   }
   if (session.session_status === 'completed') {
@@ -219,11 +233,19 @@ async function endSession(req, res) {
       return res.status(400).json({ error: 'session_id is required' });
     }
 
-    const updatedSession = await endSessionCore(session_id);
+    // Drivers can only end their own sessions; admins can end any.
+    const requesterId = req.auth.role === 'admin' ? null : req.auth.id;
+    const updatedSession = await endSessionCore(
+      session_id,
+      'Your parking session has ended.',
+      requesterId
+    );
     res.json({ session: updatedSession });
   } catch (err) {
     console.error('endSession error:', err.message);
-    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Could not end parking session' });
+    res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : 'Could not end parking session',
+    });
   }
 }
 
