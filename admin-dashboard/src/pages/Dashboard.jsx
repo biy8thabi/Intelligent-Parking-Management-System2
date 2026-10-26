@@ -1,0 +1,3 @@
+import {useNavigate} from "react-router-dom";
+import Sessions from "./Sessions";
+export default function Dashboard({token,onUnauthorised}){const nav=useNavigate();return <div className="page"><div className="title"><div><h1>Dashboard Overview</h1><p>Administrator workspace connected to your team's API.</p></div><button className="primary" onClick={()=>nav("/active-sessions")}>View Sessions</button></div><Sessions embedded token={token} onUnauthorised={onUnauthorised}/><p className="setting-note">Parking totals, revenue and payment summaries require additional documented admin endpoints. No demo statistics are shown.</p></div>}
