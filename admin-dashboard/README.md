@@ -1,11 +1,11 @@
 # ParkWise Admin — Backend Integration Prepared
 
-This React/Vite admin site uses the Express endpoints documented by the IPMS backend team. No Supabase service-role key belongs in this project.
+This React/Vite admin site is configured to use the existing Express API at `https://intelligent-parking-management-system2-4.onrender.com`. No Supabase service-role key belongs in this project.
 
 ## Run locally
 
 1. `npm.cmd install`
-2. Copy `.env.example` to `.env` and set `VITE_API_URL` to the **Express backend base URL** (not Supabase URL). Do not add a trailing `/`.
+2. Optional: copy `.env.example` to `.env` if you need to override the default. `VITE_API_URL` must be the **Express backend base URL** (not the Supabase URL). Do not add a trailing `/`.
 3. `npm.cmd run dev`
 
 ## Implemented frontend integration
@@ -18,7 +18,7 @@ This React/Vite admin site uses the Express endpoints documented by the IPMS bac
 
 ## Not yet verified
 
-Requires a deployed/running Express API, configured CORS origin, and an admin account. Backend API response formats are based on the team's documentation and have not been live-tested.
+The frontend has not been live-tested against the deployed API in this review. Successful sign-in depends on the backend returning `{ token, admin: { role: "admin", ... } }`, `/api/auth/me` returning an `admin` object, and the deployed API allowing the frontend origin through CORS.
 
 ## Not available in documented admin API
 
