@@ -1,398 +1,66 @@
+import { useCallback, useEffect, useState } from 'react';
+import { request } from '../services/api';
 
-import { useCallback, useEffect, useState } from "react";
-import { request } from "../services/api";
-
-const money = (value) =>
-  typeof value === "number" ? `R${value.toFixed(2)}` : "—";
-
-const formatDate = (value) =>
-  value ? new Date(value).toLocaleString() : "—";
-
-function DataTable({ columns, rows, empty }) {
+function Table({ rows, columns, empty }) {
   if (!rows.length) return <p>{empty}</p>;
-
-  return (
-    <div style={{ overflowX: "auto" }}>
-      <table
-        style={{
-          width: "100%",
-          textAlign: "left",
-          borderSpacing: "12px",
-        }}
-      >
-        <thead>
-          <tr>
-            {columns.map((column) => (
-              <th key={column.key}>{column.label}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, index) => (
-            <tr key={row.id || index}>
-              {columns.map((column) => (
-                <td key={column.key}>
-                  {column.render
-                    ? column.render(row)
-                    : row[column.key] ?? "—"}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+  return <div style={{overflowX:'auto'}}><table style={{width:'100%',textAlign:'left',borderSpacing:12}}><thead><tr>{columns.map(c=><th key={c.label}>{c.label}</th>)}</tr></thead><tbody>{rows.map((r,i)=><tr key={r.id ?? i}>{columns.map(c=><td key={c.label}>{c.value(r) ?? '—'}</td>)}</tr>)}</tbody></table></div>;
 }
-
+const date = v => v ? new Date(v).toLocaleString() : '—';
 export default function CrudPage({ title }) {
-  const [availability, setAvailability] = useState(null);
-  const [sessions, setSessions] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [ticketSessionId, setTicketSessionId] = useState("");
-  const [ticket, setTicket] = useState(null);
-  const [ticketError, setTicketError] = useState("");
-  const [ticketLoading, setTicketLoading] = useState(false);
-
-  const token = sessionStorage.getItem("pw_admin_token");
-
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    setError("");
-
+  const [availability,setAvailability] = useState(null);
+  const [sessions,setSessions] = useState([]);
+  const [loading,setLoading] = useState(false);
+  const [error,setError] = useState('');
+  const [sessionId,setSessionId] = useState('');
+  const [ticket,setTicket] = useState(null);
+  const [ticketError,setTicketError] = useState('');
+  const [ticketLoading,setTicketLoading] = useState(false);
+  const token = sessionStorage.getItem('pw_admin_token');
+  const needsSpaces = ['Parking Lots','Parking Slots'].includes(title);
+  const needsSessions = ['Bookings','Drivers','Vehicles','Payments'].includes(title);
+  const load = useCallback(async () => {
+    if (!needsSpaces && !needsSessions) return;
+    setLoading(true); setError('');
     try {
-      if (title === "Parking Slots" || title === "Parking Lots") {
-        const result = await request("/api/parking/availability");
-        setAvailability(result);
-      }
-
-      if (
-        ["Bookings", "Drivers", "Vehicles", "Payments"].includes(title)
-      ) {
-        if (!token) throw new Error("Administrator login required.");
-
-        const result = await request("/api/admin/sessions/active", {
-          token,
-        });
-
-        if (!Array.isArray(result.active_sessions)) {
-          throw new Error("Unexpected sessions response.");
-        }
-
+      if (needsSpaces) setAvailability(await request('/api/parking/availability'));
+      if (needsSessions) {
+        if (!token) throw new Error('Administrator login required');
+        const result = await request('/api/admin/sessions/active',{token});
+        if (!Array.isArray(result.active_sessions)) throw new Error('Unexpected active sessions response');
         setSessions(result.active_sessions);
       }
-    } catch (err) {
-      setError(err.message || "Unable to load records.");
-    } finally {
-      setLoading(false);
-    }
-  }, [title, token]);
-
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
-
-  async function findTicket(event) {
-    event.preventDefault();
-    setTicketError("");
-    setTicket(null);
-    setTicketLoading(true);
-
-    try {
-      if (!token) throw new Error("Administrator login required.");
-
-      const id = ticketSessionId.trim();
-      if (!id) throw new Error("Enter a session ID.");
-
-      const result = await request(
-        `/api/tickets/${encodeURIComponent(id)}`,
-        { token }
-      );
-
-      setTicket(result);
-    } catch (err) {
-      setTicketError(
-        err.message || "Unable to retrieve this ticket."
-      );
-    } finally {
-      setTicketLoading(false);
-    }
-  }
-
+    } catch(e) { setError(e.message || 'Unable to load data'); }
+    finally { setLoading(false); }
+  },[needsSpaces,needsSessions,token]);
+  useEffect(()=>{load();},[load]);
   const spaces = availability?.available_spaces || [];
-
-  const zones = Array.from(
-    new Set(spaces.map((space) => space.zone).filter(Boolean))
-  );
-
-  const drivers = Array.from(
-    new Map(
-      sessions
-        .filter((session) => session.users?.email)
-        .map((session) => [
-          session.users.email,
-          {
-            id: session.users.email,
-            name: session.users.full_name,
-            email: session.users.email,
-          },
-        ])
-    ).values()
-  );
-
-  const vehicles = Array.from(
-    new Map(
-      sessions
-        .filter((session) => session.vehicle_registration_number)
-        .map((session) => [
-          session.vehicle_registration_number,
-          {
-            id: session.vehicle_registration_number,
-            registration: session.vehicle_registration_number,
-            driver: session.users?.full_name || "—",
-          },
-        ])
-    ).values()
-  );
-
-  return (
-    <div className="page">
-      <div className="title">
-        <div>
-          <h1>{title}</h1>
-          <p>ParkWise Administration Dashboard</p>
-        </div>
-
-        {title !== "QR Tickets" && (
-          <button
-            className="primary"
-            onClick={loadData}
-            disabled={loading}
-          >
-            {loading ? "Loading..." : "Refresh"}
-          </button>
-        )}
-      </div>
-
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-
-      {loading && <p>Loading real backend data...</p>}
-
-      {!loading && !error && title === "Parking Slots" && (
-        <section className="panel">
-          <h3>Parking Availability</h3>
-          <p>Total: {availability?.total_spaces ?? 0}</p>
-          <p>Available: {availability?.available_count ?? 0}</p>
-          <p>Occupied: {availability?.occupied_count ?? 0}</p>
-          <p>Disabled: {availability?.disabled_count ?? 0}</p>
-
-          <h3>Available Parking Slots</h3>
-          <DataTable
-            rows={spaces}
-            empty="No available parking slots."
-            columns={[
-              { key: "zone", label: "Zone" },
-              { key: "bay_number", label: "Bay Number" },
-              { key: "status", label: "Status" },
-            ]}
-          />
-          <p>
-            Occupied and disabled slot details require an expanded
-            administrator API.
-          </p>
-        </section>
-      )}
-
-      {!loading && !error && title === "Parking Lots" && (
-        <section className="panel">
-          <h3>Parking Zones</h3>
-          <p>
-            Zones derived from currently available parking spaces.
-            These are not separate parking-lot records.
-          </p>
-          <DataTable
-            rows={zones.map((zone) => ({
-              id: zone,
-              zone,
-              available: spaces.filter((s) => s.zone === zone).length,
-            }))}
-            empty="No zones with available spaces found."
-            columns={[
-              { key: "zone", label: "Zone" },
-              { key: "available", label: "Available Bays" },
-            ]}
-          />
-          <p>
-            Creating and editing parking lots requires backend
-            management endpoints.
-          </p>
-        </section>
-      )}
-
-      {!loading && !error && title === "Bookings" && (
-        <section className="panel">
-          <h3>Active Parking Sessions</h3>
-          <DataTable
-            rows={sessions}
-            empty="No active bookings found."
-            columns={[
-              {
-                key: "vehicle_registration_number",
-                label: "Vehicle",
-              },
-              {
-                key: "driver",
-                label: "Driver",
-                render: (s) => s.users?.full_name || "—",
-              },
-              {
-                key: "bay",
-                label: "Parking Bay",
-                render: (s) =>
-                  s.parking_spaces
-                    ? [
-                        s.parking_spaces.zone,
-                        s.parking_spaces.bay_number,
-                      ]
-                        .filter(Boolean)
-                        .join("-")
-                    : "—",
-              },
-              {
-                key: "entry_time",
-                label: "Started",
-                render: (s) => formatDate(s.entry_time),
-              },
-              {
-                key: "status",
-                label: "Status",
-                render: () => "Active",
-              },
-            ]}
-          />
-        </section>
-      )}
-
-      {!loading && !error && title === "Drivers" && (
-        <section className="panel">
-          <h3>Drivers With Active Sessions</h3>
-          <DataTable
-            rows={drivers}
-            empty="No drivers with active sessions."
-            columns={[
-              { key: "name", label: "Name" },
-              { key: "email", label: "Email" },
-            ]}
-          />
-          <p>
-            A complete registered-driver directory requires an
-            administrator users endpoint.
-          </p>
-        </section>
-      )}
-
-      {!loading && !error && title === "Vehicles" && (
-        <section className="panel">
-          <h3>Vehicles Currently Parked</h3>
-          <DataTable
-            rows={vehicles}
-            empty="No vehicles in active sessions."
-            columns={[
-              { key: "registration", label: "Registration" },
-              { key: "driver", label: "Driver" },
-            ]}
-          />
-          <p>
-            This is based on active sessions, not a complete
-            vehicle-registration database.
-          </p>
-        </section>
-      )}
-
-      {!loading && !error && title === "Payments" && (
-        <section className="panel">
-          <h3>Parking Fees and Payments</h3>
-          <p>
-            The backend calculates parking fees when sessions end,
-            using a rate of R10 per hour.
-          </p>
-          <p>
-            Active sessions: {sessions.length}
-          </p>
-          <p>
-            Completed-session fees and payment transactions are
-            not available through the confirmed administrator API.
-          </p>
-          <p>
-            This page cannot display verified payment records
-            until those endpoints are implemented.
-          </p>
-        </section>
-      )}
-
-      {title === "QR Tickets" && (
-        <section className="panel">
-          <h3>Find QR Ticket</h3>
-          <p>Enter a real parking session ID to retrieve its ticket.</p>
-
-          <form onSubmit={findTicket}>
-            <input
-              type="text"
-              value={ticketSessionId}
-              onChange={(e) => setTicketSessionId(e.target.value)}
-              placeholder="Parking session ID"
-              style={{
-                padding: "12px",
-                width: "100%",
-                maxWidth: "400px",
-                marginBottom: "12px",
-              }}
-            />
-
-            <div>
-              <button
-                className="primary"
-                type="submit"
-                disabled={ticketLoading}
-              >
-                {ticketLoading ? "Searching..." : "Find Ticket"}
-              </button>
-            </div>
-          </form>
-
-          {ticketError && (
-            <p className="error" role="alert">
-              {ticketError}
-            </p>
-          )}
-
-          {ticket && (
-            <div style={{ marginTop: "20px" }}>
-              <h3>Ticket Response</h3>
-              <pre
-                style={{
-                  overflowX: "auto",
-                  whiteSpace: "pre-wrap",
-                  overflowWrap: "anywhere",
-                }}
-              >
-                {JSON.stringify(ticket, null, 2)}
-              </pre>
-            </div>
-          )}
-
-          <p>
-            Ticket generation and QR image rendering require
-            confirmation of the backend ticket format and
-            administrator permissions.
-          </p>
-        </section>
-      )}
-    </div>
-  );
+  const zones = [...new Set(spaces.map(s=>s.zone).filter(Boolean))].map(z=>({id:z,zone:z,available:spaces.filter(s=>s.zone===z).length}));
+  const drivers = [...new Map(sessions.filter(s=>s.users?.email).map(s=>[s.users.email,{id:s.users.email,name:s.users.full_name,email:s.users.email}])).values()];
+  const vehicles = [...new Map(sessions.filter(s=>s.vehicle_registration_number).map(s=>[s.vehicle_registration_number,{id:s.vehicle_registration_number,registration:s.vehicle_registration_number,driver:s.users?.full_name}])).values()];
+  async function ticketAction(mode) {
+    const id=sessionId.trim(); setTicketError(''); setTicket(null);
+    if(!id) {setTicketError('Enter a parking session ID');return;}
+    if(!token) {setTicketError('Administrator login required');return;}
+    if(mode==='generate' && !window.confirm('Generate a new QR ticket for this real parking session? This creates a database record.')) return;
+    setTicketLoading(true);
+    try {
+      const result = mode==='generate'
+        ? await request('/api/tickets/generate',{token,method:'POST',body:JSON.stringify({session_id:id})})
+        : await request(`/api/tickets/${encodeURIComponent(id)}`,{token});
+      if(!result.ticket) throw new Error('Ticket missing from backend response');
+      setTicket(result.ticket);
+    } catch(e) {setTicketError(e.message || 'Ticket request failed');}
+    finally {setTicketLoading(false);}
+  }
+  return <div className="page">
+    <div className="title"><div><h1>{title}</h1><p>ParkWise administrator workspace</p></div>{(needsSpaces||needsSessions)&&<button className="primary" onClick={load} disabled={loading}>Refresh</button>}</div>
+    {error&&<p className="error" role="alert">{error}</p>}{loading&&<p>Loading live data...</p>}
+    {!loading&&!error&&title==='Parking Slots'&&<section className="panel"><h3>Parking availability</h3><p>Total: {availability?.total_spaces ?? '—'} | Available: {availability?.available_count ?? '—'} | Occupied: {availability?.occupied_count ?? '—'} | Disabled: {availability?.disabled_count ?? '—'}</p><h3>Available bays</h3><Table rows={spaces} empty="No available bays found" columns={[{label:'Zone',value:s=>s.zone},{label:'Bay',value:s=>s.bay_number},{label:'Status',value:s=>s.status}]}/><p>Occupied and disabled bay details, and editing, require additional admin endpoints.</p></section>}
+    {!loading&&!error&&title==='Parking Lots'&&<section className="panel"><h3>Parking zones</h3><p>Zones are derived from currently available bays, not separate lot records.</p><Table rows={zones} empty="No zones with available bays" columns={[{label:'Zone',value:z=>z.zone},{label:'Available bays',value:z=>z.available}]}/><p>Creating and editing lots requires a backend management API.</p></section>}
+    {!loading&&!error&&title==='Bookings'&&<section className="panel"><h3>Active bookings</h3><Table rows={sessions} empty="No active bookings" columns={[{label:'Session ID',value:s=>s.id},{label:'Vehicle',value:s=>s.vehicle_registration_number},{label:'Driver',value:s=>s.users?.full_name},{label:'Bay',value:s=>[s.parking_spaces?.zone,s.parking_spaces?.bay_number].filter(Boolean).join('-')},{label:'Started',value:s=>date(s.entry_time)}]}/></section>}
+    {!loading&&!error&&title==='Drivers'&&<section className="panel"><h3>Drivers with active sessions</h3><Table rows={drivers} empty="No drivers in active sessions" columns={[{label:'Name',value:s=>s.name},{label:'Email',value:s=>s.email}]}/><p>All registered drivers require GET /api/admin/users from the backend developer.</p></section>}
+    {!loading&&!error&&title==='Vehicles'&&<section className="panel"><h3>Currently parked vehicles</h3><Table rows={vehicles} empty="No vehicles in active sessions" columns={[{label:'Registration',value:s=>s.registration},{label:'Driver',value:s=>s.driver}]}/></section>}
+    {!loading&&!error&&title==='Payments'&&<section className="panel"><h3>Payments</h3><p>There are {sessions.length} active sessions. Completed-session fees and verified payments require an admin payment/history endpoint. A calculated parking fee is not proof of payment.</p></section>}
+    {title==='QR Tickets'&&<section className="panel"><h3>QR ticket management</h3><p>Enter a real session ID. You can copy it from Bookings while a session is active.</p><input value={sessionId} onChange={e=>setSessionId(e.target.value)} placeholder="Parking session ID" aria-label="Parking session ID" style={{padding:12,maxWidth:420,width:'100%',marginBottom:12}}/><div style={{display:'flex',gap:10,flexWrap:'wrap'}}><button className="primary" disabled={ticketLoading} onClick={()=>ticketAction('find')}>Find ticket</button><button className="secondary-button" disabled={ticketLoading} onClick={()=>ticketAction('generate')}>Generate new ticket</button></div>{ticketLoading&&<p>Loading ticket...</p>}{ticketError&&<p className="error" role="alert">{ticketError}</p>}{ticket&&<div style={{marginTop:20}}><h3>Ticket</h3><p>Code: {ticket.ticket_code || '—'}</p><p>Session: {ticket.session_id || sessionId}</p>{typeof ticket.qr_code_url==='string'&&ticket.qr_code_url.startsWith('data:image/')?<img src={ticket.qr_code_url} alt="Parking ticket QR code" style={{width:220,maxWidth:'100%',background:'white',padding:10}}/>:<p>QR image unavailable in the response.</p>}</div>}<p>Generating a ticket creates a real record. Avoid generating duplicates for the same session.</p></section>}
+  </div>;
 }
