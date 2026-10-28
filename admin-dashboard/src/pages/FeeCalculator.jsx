@@ -1,5 +1,138 @@
-import {useMemo,useState} from "react";
-const ratesKey="pw_fee_rates";
-const defaultRates={hourly:15,daily:100,grace:10};
-function loadRates(){try{return {...defaultRates,...JSON.parse(localStorage.getItem(ratesKey)||"{}")}}catch{return defaultRates}}
-export default function FeeCalculator(){const [rates,setRates]=useState(loadRates),[hours,setHours]=useState("2"),[minutes,setMinutes]=useState("30"),[method,setMethod]=useState("hourly"),[ticket,setTicket]=useState("PW-DEMO-1042"),[vehicle,setVehicle]=useState("ND 123-456"),[notice,setNotice]=useState("");const totalMinutes=Math.max(0,(Number(hours)||0)*60+(Number(minutes)||0));const billable=Math.max(0,totalMinutes-(Number(rates.grace)||0));const fee=useMemo(()=>method==="daily"?Math.ceil(billable/1440)*Number(rates.daily||0):Math.ceil(billable/60)*Number(rates.hourly||0),[billable,method,rates]);const money=n=>new Intl.NumberFormat("en-ZA",{style:"currency",currency:"ZAR"}).format(n);function saveRates(e){e.preventDefault();localStorage.setItem(ratesKey,JSON.stringify(rates));setNotice("Rates saved in this browser.")};function printTicket(){window.print()};return <div className="page"><div className="title"><div><h1>Fee Calculator & Ticket Preview</h1><p>Test parking fee rules and prepare a printable sample ticket.</p></div><span className="badge">Demo mode</span></div><div className="grid2"><section className="panel"><h3>Parking fee calculator</h3><p className="muted">Uses the rates you configure below. This does not charge a customer.</p><div className="form-grid"><label>Parking duration — hours<input type="number" min="0" max="720" value={hours} onChange={e=>setHours(e.target.value)}/></label><label>Additional minutes<input type="number" min="0" max="59" value={minutes} onChange={e=>setMinutes(e.target.value)}/></label></div><label className="calculator-label">Pricing method<select value={method} onChange={e=>setMethod(e.target.value)}><option value="hourly">Hourly (round up to next hour)</option><option value="daily">Daily (round up to next day)</option></select></label><div className="fee-result"><small>Estimated parking fee</small><h2>{money(fee)}</h2><span>{Math.floor(totalMinutes/60)}h {totalMinutes%60}m parked · {billable} billable minutes after grace period</span></div><form onSubmit={saveRates}><h3>Configure sample rates</h3><div className="form-grid"><label>Hourly rate (R)<input type="number" min="0" step="0.5" required value={rates.hourly} onChange={e=>setRates({...rates,hourly:e.target.value})}/></label><label>Daily rate (R)<input type="number" min="0" step="1" required value={rates.daily} onChange={e=>setRates({...rates,daily:e.target.value})}/></label><label>Grace period (minutes)<input type="number" min="0" max="180" required value={rates.grace} onChange={e=>setRates({...rates,grace:e.target.value})}/></label></div><button className="primary" type="submit">Save sample rates</button>{notice&&<p className="form-message" role="status">{notice}</p>}</form></section><section className="panel ticket-panel"><h3>Sample QR ticket</h3><p className="muted">Preview only — not a verified ticket or a real QR code.</p><div className="ticket-preview"><div className="ticket-brand"><span className="brand-mark">P</span><span><b>ParkWise</b><small>PARKING TICKET</small></span></div><div className="ticket-code">{ticket||"PW-DEMO-1042"}</div><div className="fake-qr" aria-label="Decorative QR placeholder">{Array.from({length:100},(_,i)=><i key={i} className={((i*17+i%7*11)%5<2||(i%10<3&&i<30)||(i%10>6&&i>69))?"filled":""}/>)}</div><p className="ticket-warning">DEMO TICKET · NOT VALID FOR ENTRY</p><div className="ticket-detail"><span>Vehicle registration</span><b>{vehicle||"Not entered"}</b></div><div className="ticket-detail"><span>Duration</span><b>{Math.floor(totalMinutes/60)}h {totalMinutes%60}m</b></div><div className="ticket-detail"><span>Estimated fee</span><b>{money(fee)}</b></div><div className="ticket-detail"><span>Status</span><b>Preview only</b></div></div><div className="form-grid ticket-inputs"><label>Ticket reference<input value={ticket} onChange={e=>setTicket(e.target.value)} maxLength="32"/></label><label>Vehicle registration<input value={vehicle} onChange={e=>setVehicle(e.target.value)} maxLength="20"/></label></div><button className="primary" onClick={printTicket}>Print ticket preview</button></section></div><p className="setting-note">Before live use, confirm the official pricing rules with your team. Real QR generation, ticket persistence, payment processing and validation require backend integration.</p></div>}
+
+import { useState } from "react";
+
+const RATE_PER_HOUR = 10;
+
+function calculateFee(minutes) {
+  const billableMinutes = Math.max(1, Math.round(minutes));
+  return Math.round(
+    (billableMinutes / 60) * RATE_PER_HOUR * 100
+  ) / 100;
+}
+
+export default function FeeCalculator() {
+  const [hours, setHours] = useState("1");
+  const [minutes, setMinutes] = useState("0");
+
+  const valid =
+    hours !== "" &&
+    minutes !== "" &&
+    Number.isInteger(Number(hours)) &&
+    Number.isInteger(Number(minutes)) &&
+    Number(hours) >= 0 &&
+    Number(minutes) >= 0 &&
+    Number(minutes) <= 59;
+
+  const totalMinutes = valid
+    ? Number(hours) * 60 + Number(minutes)
+    : 0;
+
+  const fee = valid ? calculateFee(totalMinutes) : 0;
+
+  function reset() {
+    setHours("1");
+    setMinutes("0");
+  }
+
+  return (
+    <div className="page">
+      <div className="title">
+        <div>
+          <h1>Parking Fee Calculator</h1>
+          <p>Calculate parking fees using the ParkWise rate.</p>
+        </div>
+      </div>
+
+      <section className="panel">
+        <h3>Parking Duration</h3>
+
+        <div
+          style={{
+            display: "flex",
+            gap: "16px",
+            flexWrap: "wrap",
+            marginBottom: "20px",
+          }}
+        >
+          <label>
+            Hours
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={hours}
+              onChange={(e) => setHours(e.target.value)}
+              style={{
+                display: "block",
+                padding: "12px",
+                marginTop: "8px",
+                width: "150px",
+              }}
+            />
+          </label>
+
+          <label>
+            Minutes
+            <input
+              type="number"
+              min="0"
+              max="59"
+              step="1"
+              value={minutes}
+              onChange={(e) => setMinutes(e.target.value)}
+              style={{
+                display: "block",
+                padding: "12px",
+                marginTop: "8px",
+                width: "150px",
+              }}
+            />
+          </label>
+        </div>
+
+        {!valid && (
+          <p className="error" role="alert">
+            Enter valid hours and minutes (0–59).
+          </p>
+        )}
+
+        {valid && (
+          <>
+            <p>
+              <strong>Hourly Rate:</strong> R10.00
+            </p>
+            <p>
+              <strong>Total Duration:</strong> {totalMinutes} minutes
+            </p>
+            <p>
+              <strong>Billable Duration:</strong>{" "}
+              {Math.max(1, Math.round(totalMinutes))} minutes
+            </p>
+
+            <div
+              style={{
+                padding: "20px",
+                borderRadius: "12px",
+                marginTop: "20px",
+                marginBottom: "20px",
+                background: "rgba(130, 80, 220, 0.12)",
+              }}
+            >
+              <h3>Estimated Parking Fee</h3>
+              <h1>R{fee.toFixed(2)}</h1>
+            </div>
+
+            <p>
+              This is an estimate. The backend calculates and saves
+              the final fee when the parking session ends.
+            </p>
+          </>
+        )}
+
+        <button className="secondary-button" onClick={reset}>
+          Reset Calculator
+        </button>
+      </section>
+    </div>
+  );
+}
