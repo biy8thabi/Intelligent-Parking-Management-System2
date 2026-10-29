@@ -9,12 +9,14 @@ async function getAvailability(req, res) {
   try {
     const { data: spaces, error } = await supabase
       .from('parking_spaces')
-      .select('id, zone, bay_number, status');
+      .select('id, zone, bay_number, floor, gate, status, is_accessible');
 
     if (error) throw error;
 
     const available = spaces.filter((s) => s.status === 'available');
     const occupied = spaces.filter((s) => s.status === 'occupied');
+    // "disabled" means a bay an admin has switched off (out of service).
+    // It is NOT the same as an accessible bay - that is the is_accessible flag.
     const disabled = spaces.filter((s) => s.status === 'disabled');
 
     res.json({
@@ -22,6 +24,7 @@ async function getAvailability(req, res) {
       available_count: available.length,
       occupied_count: occupied.length,
       disabled_count: disabled.length,
+      accessible_available_count: available.filter((s) => s.is_accessible).length,
       available_spaces: available,
     });
   } catch (err) {
@@ -110,7 +113,7 @@ async function getActiveSessionForUser(req, res) {
 
     const { data: session, error } = await supabase
       .from('parking_sessions')
-      .select('*')
+      .select('*, parking_spaces:parking_space_id ( zone, bay_number, floor, gate, is_accessible )')
       .eq('user_id', user_id)
       .eq('session_status', 'active')
       .maybeSingle();
@@ -133,7 +136,7 @@ async function getSessionHistory(req, res) {
 
     const { data: sessions, error } = await supabase
       .from('parking_sessions')
-      .select('*')
+      .select('*, parking_spaces:parking_space_id ( zone, bay_number, floor, gate, is_accessible )')
       .eq('user_id', user_id)
       .eq('session_status', 'completed')
       .order('exit_time', { ascending: false });
@@ -178,6 +181,11 @@ async function endSessionCore(
   }
   if (session.session_status === 'completed') {
     const err = new Error('This session has already ended');
+    err.statusCode = 409;
+    throw err;
+  }
+  if (session.session_status === 'cancelled') {
+    const err = new Error('This session was cancelled');
     err.statusCode = 409;
     throw err;
   }
@@ -249,11 +257,91 @@ async function endSession(req, res) {
   }
 }
 
+// ------------------------------------------------------------
+// POST /api/parking/session/cancel
+// Body: { session_id }
+// Free cancellation for a session the driver never actually used.
+// Only allowed within CANCEL_WINDOW_MINUTES of the session starting;
+// after that the driver has to end the session normally and pay the fee.
+// (Without a window, anyone could dodge the fee by "cancelling" at exit.)
+// ------------------------------------------------------------
+const CANCEL_WINDOW_MINUTES = 5;
+
+async function cancelSession(req, res) {
+  try {
+    const { session_id } = req.body;
+
+    if (!session_id) {
+      return res.status(400).json({ error: 'session_id is required' });
+    }
+
+    const { data: session, error: fetchError } = await supabase
+      .from('parking_sessions')
+      .select('id, user_id, parking_space_id, entry_time, session_status')
+      .eq('id', session_id)
+      .maybeSingle();
+
+    if (fetchError) throw fetchError;
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+    if (!isOwnerOrAdmin(req, session.user_id)) {
+      return res.status(403).json({ error: 'You can only cancel your own sessions' });
+    }
+    if (session.session_status !== 'active') {
+      return res.status(409).json({ error: 'Only an active session can be cancelled' });
+    }
+
+    const minutesSinceStart = (Date.now() - new Date(session.entry_time).getTime()) / 60000;
+    if (minutesSinceStart > CANCEL_WINDOW_MINUTES) {
+      return res.status(409).json({
+        error: `The free cancellation window (${CANCEL_WINDOW_MINUTES} minutes) has passed. End the session instead to pay the fee.`,
+      });
+    }
+
+    const { data: cancelled, error: updateError } = await supabase
+      .from('parking_sessions')
+      .update({
+        session_status: 'cancelled',
+        exit_time: new Date().toISOString(),
+        fee_amount: 0,
+      })
+      .eq('id', session_id)
+      .select()
+      .single();
+
+    if (updateError) throw updateError;
+
+    const { error: spaceError } = await supabase
+      .from('parking_spaces')
+      .update({ status: 'available', updated_at: new Date().toISOString() })
+      .eq('id', session.parking_space_id);
+
+    if (spaceError) throw spaceError;
+
+    try {
+      await createNotification(
+        session.user_id,
+        'Your parking session was cancelled. No fee was charged.',
+        'session_cancelled'
+      );
+    } catch (notifyErr) {
+      console.error('Notification failed (non-blocking):', notifyErr.message);
+    }
+
+    res.json({ session: cancelled });
+  } catch (err) {
+    console.error('cancelSession error:', err.message);
+    res.status(500).json({ error: 'Could not cancel parking session' });
+  }
+}
+
 module.exports = {
   getAvailability,
   createSession,
   endSession,
   endSessionCore,
+  cancelSession,
   getActiveSessionForUser,
   getSessionHistory,
 };

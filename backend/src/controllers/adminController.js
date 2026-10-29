@@ -51,5 +51,19 @@ async function forceEndSession(req, res) {
     res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Could not force-end session' });
   }
 }
+async function getAllUsers(req, res) {
+  try {
+    const { data: users, error } = await supabase
+      .from('users')
+      .select('id, full_name, email, phone_number, created_at')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ users });
+  } catch (err) {
+    console.error('getAllUsers error:', err.message);
+    res.status(500).json({ error: 'Could not fetch users' });
+  }
+}
 
-module.exports = { getActiveSessions, forceEndSession };
+module.exports = { getActiveSessions, forceEndSession, getAllUsers };
+ 

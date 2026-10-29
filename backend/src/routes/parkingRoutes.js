@@ -5,6 +5,7 @@ const {
   getAvailability,
   createSession,
   endSession,
+  cancelSession,
   getActiveSessionForUser,
   getSessionHistory,
 } = require('../controllers/parkingController');
@@ -17,6 +18,9 @@ router.post('/session/start', requireAuth, createSession);
 
 // POST /api/parking/session/end - logged in; session must be yours
 router.post('/session/end', requireAuth, endSession);
+
+// POST /api/parking/session/cancel - logged in; session must be yours
+router.post('/session/cancel', requireAuth, cancelSession);
 
 // GET /api/parking/session/active/:user_id - must be your own id (or admin)
 router.get('/session/active/:user_id', requireSelf('user_id'), getActiveSessionForUser);
