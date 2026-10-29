@@ -10,13 +10,13 @@ import Settings from "./pages/Settings";
 import FeeCalculator from "./pages/FeeCalculator";
 import Sessions from "./pages/Sessions";
 import Reports from "./pages/Reports";
+import Drivers from "./pages/Drivers";
 
 import { getAdminProfile } from "./services/api";
 
 const names = [
   "Parking Lots",
   "Parking Slots",
-  "Drivers",
   "Vehicles",
   "Bookings",
   "Payments",
@@ -46,6 +46,7 @@ export default function App() {
     if (!token) {
       setAdmin(null);
       setChecking(false);
+
       return () => {
         active = false;
       };
@@ -146,6 +147,16 @@ export default function App() {
           }
         />
 
+        <Route
+          path="drivers"
+          element={
+            <Drivers
+              token={token}
+              onUnauthorised={logout}
+            />
+          }
+        />
+
         {names.map((name) => (
           <Route
             key={name}
@@ -198,7 +209,10 @@ export default function App() {
         />
       </Route>
 
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route
+        path="*"
+        element={<Navigate to="/" replace />}
+      />
     </Routes>
   );
 }
