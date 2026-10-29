@@ -58,11 +58,13 @@ export const forceEndSession = (token, id) =>
     }
   );
 
+// Retrieve registered users using an administrator token.
+export const getAdminUsers = (token) =>
+  request("/api/admin/users", { token });
+
 // Parking availability for the Reports page.
 export async function getParkingAvailability() {
   const data = await request("/api/parking/availability");
-
-  // Support common API response formats.
   const result = data.data ?? data.availability ?? data;
 
   return {
@@ -70,13 +72,22 @@ export async function getParkingAvailability() {
       result.total_spaces ?? result.totalSpaces ?? result.total ?? 0
     ),
     available_count: Number(
-      result.available_count ?? result.availableSpaces ?? result.available ?? 0
+      result.available_count ??
+        result.availableSpaces ??
+        result.available ??
+        0
     ),
     occupied_count: Number(
-      result.occupied_count ?? result.occupiedSpaces ?? result.occupied ?? 0
+      result.occupied_count ??
+        result.occupiedSpaces ??
+        result.occupied ??
+        0
     ),
     disabled_count: Number(
-      result.disabled_count ?? result.disabledSpaces ?? result.disabled ?? 0
+      result.disabled_count ??
+        result.disabledSpaces ??
+        result.disabled ??
+        0
     ),
   };
 }
