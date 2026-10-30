@@ -1,834 +1,672 @@
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { request } from '../services/api';
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { request } from "../services/api";
+import "../styles.css";
 
-const money = value =>
-  value === null || value === undefined || value === ''
-    ? '—'
-    : new Intl.NumberFormat('en-ZA', {
-        style: 'currency',
-        currency: 'ZAR',
-      }).format(Number(value));
+const PAYMENT_ENDPOINT = "/api/admin/payments";
 
-const date = value => {
-  if (!value) return '—';
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? '—' : parsed.toLocaleString();
-};
+function formatMoney(value) {
+  const amount = Number(value);
 
-const text = value =>
-  value === null || value === undefined || value === ''
-    ? '—'
-    : String(value);
+  if (!Number.isFinite(amount)) return "—";
 
-function getErrorMessage(error) {
-  return error?.message || 'Something went wrong. Please try again.';
+  return new Intl.NumberFormat("en-ZA", {
+    style: "currency",
+    currency: "ZAR",
+  }).format(amount);
 }
 
-function downloadCsv(filename, rows, columns) {
-  if (!rows.length) {
-    window.alert('There is no data to export.');
-    return;
-  }
+function formatDate(value) {
+  if (!value) return "—";
 
-  const escapeCell = value => {
-    const result = String(value ?? '');
-    return `"${result.replace(/"/g, '""')}"`;
+  const parsed = new Date(value);
+
+  if (Number.isNaN(parsed.getTime())) return "—";
+
+  return parsed.toLocaleString("en-ZA", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
+function getStatus(payment) {
+  return String(
+    payment.status ??
+      payment.payment_status ??
+      "unknown"
+  ).toLowerCase();
+}
+
+function getPaymentId(payment) {
+  return (
+    payment.payment_id ??
+    payment.id ??
+    payment.transaction_id ??
+    "—"
+  );
+}
+
+function getAmount(payment) {
+  return Number(
+    payment.amount ??
+      payment.amount_paid ??
+      payment.total_amount ??
+      0
+  );
+}
+
+function getReference(payment) {
+  return (
+    payment.reference ??
+    payment.transaction_reference ??
+    payment.payment_reference ??
+    "—"
+  );
+}
+
+function getMethod(payment) {
+  return (
+    payment.payment_method ??
+    payment.method ??
+    "Not provided"
+  );
+}
+
+function getDate(payment) {
+  return (
+    payment.created_at ??
+    payment.paid_at ??
+    payment.payment_date ??
+    null
+  );
+}
+
+function StatusBadge({ status }) {
+  const styles = {
+    completed: "payment-status payment-status-success",
+    successful: "payment-status payment-status-success",
+    paid: "payment-status payment-status-success",
+    pending: "payment-status payment-status-pending",
+    failed: "payment-status payment-status-failed",
+    cancelled: "payment-status payment-status-failed",
+    refunded: "payment-status payment-status-refunded",
   };
 
-  const csv = [
-    columns.map(column => escapeCell(column.label)).join(','),
-    ...rows.map(row =>
-      columns.map(column => escapeCell(column.value(row))).join(',')
-    ),
-  ].join('\r\n');
-
-  const blob = new Blob(['\uFEFF', csv], {
-    type: 'text/csv;charset=utf-8;',
-  });
-
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
-function DataTable({ rows, columns, emptyMessage }) {
-  if (!rows.length) {
-    return <div className="empty-state">{emptyMessage}</div>;
-  }
-
   return (
-    <div style={{ overflowX: 'auto' }}>
-      <table
-        style={{
-          width: '100%',
-          textAlign: 'left',
-          borderSpacing: 0,
-          borderCollapse: 'collapse',
-        }}
-      >
-        <thead>
-          <tr>
-            {columns.map(column => (
-              <th
-                key={column.label}
-                style={{
-                  padding: '13px 12px',
-                  borderBottom: '1px solid var(--border, #ddd)',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {column.label}
-              </th>
-            ))}
-          </tr>
-        </thead>
-
-        <tbody>
-          {rows.map((row, index) => (
-            <tr key={row.id ?? row.session_id ?? index}>
-              {columns.map(column => (
-                <td
-                  key={column.label}
-                  style={{
-                    padding: '13px 12px',
-                    borderBottom: '1px solid var(--border, #ddd)',
-                    verticalAlign: 'top',
-                  }}
-                >
-                  {column.value(row) ?? '—'}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <span className={styles[status] ?? "payment-status"}>
+      {status.charAt(0).toUpperCase() + status.slice(1)}
+    </span>
   );
 }
 
-function StatCard({ label, value, description }) {
+function SummaryCard({ title, value, description }) {
   return (
-    <div className="panel" style={{ minWidth: 0 }}>
-      <p style={{ margin: 0, opacity: 0.75 }}>{label}</p>
-      <h2 style={{ margin: '10px 0', overflowWrap: 'anywhere' }}>
-        {value}
-      </h2>
-      {description && <small>{description}</small>}
-    </div>
+    <article className="panel payment-summary-card">
+      <p className="payment-summary-label">{title}</p>
+      <h2 className="payment-summary-value">{value}</h2>
+      <p className="payment-summary-description">
+        {description}
+      </p>
+    </article>
   );
 }
 
-function Notice({ children, type = 'info' }) {
-  const color =
-    type === 'error'
-      ? '#dc2626'
-      : type === 'success'
-        ? '#15803d'
-        : '#7c3aed';
+export default function Payments() {
+  const [payments, setPayments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
 
-  return (
-    <div
-      role={type === 'error' ? 'alert' : 'status'}
-      style={{
-        borderLeft: `4px solid ${color}`,
-        padding: '12px 15px',
-        margin: '12px 0',
-        background: 'var(--panel-bg, rgba(124, 58, 237, 0.07))',
-        borderRadius: 6,
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
-export default function CrudPage({ title = 'Parking Slots' }) {
-  const [availability, setAvailability] = useState(null);
-  const [sessions, setSessions] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [search, setSearch] = useState('');
-  const [lastUpdated, setLastUpdated] = useState(null);
-
-  const [sessionId, setSessionId] = useState('');
-  const [ticket, setTicket] = useState(null);
-  const [ticketLoading, setTicketLoading] = useState(false);
-  const [ticketError, setTicketError] = useState('');
-  const [ticketMessage, setTicketMessage] = useState('');
-
-  const token = sessionStorage.getItem('pw_admin_token');
-
-  const needsSpaces = ['Parking Lots', 'Parking Slots'].includes(title);
-  const needsSessions = ['Bookings'].includes(title);
-  const needsTicket = title === 'QR Tickets';
-
-  const load = useCallback(async () => {
-    if (!needsSpaces && !needsSessions) return;
-
+  const loadPayments = useCallback(async () => {
     setLoading(true);
-    setError('');
+    setError("");
 
     try {
-      if (needsSpaces) {
-        const result = await request('/api/parking/availability');
+      const token = sessionStorage.getItem("pw_admin_token");
 
-        if (
-          !result ||
-          !Array.isArray(result.available_spaces)
-        ) {
-          throw new Error(
-            'The availability API returned an unexpected response.'
-          );
-        }
-
-        setAvailability(result);
-      }
-
-      if (needsSessions) {
-        if (!token) {
-          throw new Error('Your administrator session has expired. Please log in again.');
-        }
-
-        const result = await request('/api/admin/sessions/active', {
-          token,
-        });
-
-        if (!Array.isArray(result?.active_sessions)) {
-          throw new Error(
-            'The active-sessions API returned an unexpected response.'
-          );
-        }
-
-        setSessions(result.active_sessions);
-      }
-
-      setLastUpdated(new Date());
-    } catch (err) {
-      setError(getErrorMessage(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [needsSpaces, needsSessions, token]);
-
-  useEffect(() => {
-    setSearch('');
-    setError('');
-    setTicket(null);
-    setTicketError('');
-    setTicketMessage('');
-    load();
-  }, [load]);
-
-  const availableSpaces = availability?.available_spaces ?? [];
-
-  const zones = useMemo(() => {
-    const grouped = new Map();
-
-    for (const space of availableSpaces) {
-      const zone = space.zone || 'Unassigned zone';
-
-      if (!grouped.has(zone)) {
-        grouped.set(zone, {
-          id: zone,
-          zone,
-          available: 0,
-          bays: [],
-        });
-      }
-
-      const item = grouped.get(zone);
-      item.available += 1;
-      item.bays.push(space.bay_number);
-    }
-
-    return Array.from(grouped.values()).sort((a, b) =>
-      a.zone.localeCompare(b.zone)
-    );
-  }, [availableSpaces]);
-
-  const filteredSpaces = useMemo(() => {
-    const query = search.trim().toLowerCase();
-
-    if (!query) return availableSpaces;
-
-    return availableSpaces.filter(space =>
-      [
-        space.id,
-        space.zone,
-        space.bay_number,
-        space.status,
-      ]
-        .filter(Boolean)
-        .some(value => String(value).toLowerCase().includes(query))
-    );
-  }, [availableSpaces, search]);
-
-  const filteredSessions = useMemo(() => {
-    const query = search.trim().toLowerCase();
-
-    if (!query) return sessions;
-
-    return sessions.filter(session =>
-      [
-        session.id,
-        session.vehicle_registration_number,
-        session.users?.full_name,
-        session.users?.email,
-        session.parking_spaces?.zone,
-        session.parking_spaces?.bay_number,
-      ]
-        .filter(Boolean)
-        .some(value => String(value).toLowerCase().includes(query))
-    );
-  }, [sessions, search]);
-
-  const filteredZones = useMemo(() => {
-    const query = search.trim().toLowerCase();
-
-    if (!query) return zones;
-
-    return zones.filter(zone =>
-      zone.zone.toLowerCase().includes(query)
-    );
-  }, [zones, search]);
-
-  async function ticketAction(mode) {
-    const id = sessionId.trim();
-
-    setTicket(null);
-    setTicketError('');
-    setTicketMessage('');
-
-    if (!id) {
-      setTicketError('Enter a parking session ID first.');
-      return;
-    }
-
-    if (!token) {
-      setTicketError('Administrator login required. Please log in again.');
-      return;
-    }
-
-    if (
-      mode === 'generate' &&
-      !window.confirm(
-        'Attempt to generate a ticket for this session? Only continue if the backend permits this operation.'
-      )
-    ) {
-      return;
-    }
-
-    setTicketLoading(true);
-
-    try {
-      const result =
-        mode === 'generate'
-          ? await request('/api/tickets/generate', {
-              token,
-              method: 'POST',
-              body: JSON.stringify({ session_id: id }),
-            })
-          : await request(
-              `/api/tickets/${encodeURIComponent(id)}`,
-              { token }
-            );
-
-      if (!result?.ticket) {
+      if (!token) {
         throw new Error(
-          'The ticket endpoint did not return a ticket. Check the backend response format.'
+          "Your admin session has expired. Please log in again."
         );
       }
 
-      setTicket(result.ticket);
-      setTicketMessage(
-        mode === 'generate'
-          ? 'The backend returned a ticket. Verify that it was saved and is valid before using it.'
-          : 'Ticket information loaded from the backend.'
-      );
+      const result = await request(PAYMENT_ENDPOINT, {
+        token,
+      });
+
+      // Accept common API response shapes.
+      const records = Array.isArray(result)
+        ? result
+        : result?.payments ??
+          result?.transactions ??
+          result?.data;
+
+      if (!Array.isArray(records)) {
+        throw new Error(
+          "The payments endpoint did not return a payment list. Check the backend response format."
+        );
+      }
+
+      setPayments(records);
     } catch (err) {
-      setTicketError(getErrorMessage(err));
+      setError(
+        err?.message ||
+          "Unable to load payments from the backend."
+      );
     } finally {
-      setTicketLoading(false);
+      setLoading(false);
     }
+  }, []);
+
+  useEffect(() => {
+    loadPayments();
+  }, [loadPayments]);
+
+  const filteredPayments = useMemo(() => {
+    const query = search.trim().toLowerCase();
+
+    return payments.filter((payment) => {
+      const status = getStatus(payment);
+
+      const matchesStatus =
+        statusFilter === "all" ||
+        status === statusFilter;
+
+      const searchableText = [
+        getPaymentId(payment),
+        getReference(payment),
+        getMethod(payment),
+        payment.session_id,
+        payment.user_id,
+        payment.email,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return (
+        matchesStatus &&
+        (!query || searchableText.includes(query))
+      );
+    });
+  }, [payments, search, statusFilter]);
+
+  const totals = useMemo(() => {
+    const completed = payments.filter((payment) =>
+      ["completed", "successful", "paid"].includes(
+        getStatus(payment)
+      )
+    );
+
+    const pending = payments.filter(
+      (payment) => getStatus(payment) === "pending"
+    );
+
+    const failed = payments.filter((payment) =>
+      ["failed", "cancelled"].includes(getStatus(payment))
+    );
+
+    return {
+      count: payments.length,
+      completedCount: completed.length,
+      pendingCount: pending.length,
+      failedCount: failed.length,
+      received: completed.reduce(
+        (sum, payment) => sum + getAmount(payment),
+        0
+      ),
+    };
+  }, [payments]);
+
+  function exportCsv() {
+    const headers = [
+      "Payment ID",
+      "Reference",
+      "Amount (ZAR)",
+      "Method",
+      "Status",
+      "Date",
+    ];
+
+    const rows = filteredPayments.map((payment) => [
+      getPaymentId(payment),
+      getReference(payment),
+      getAmount(payment),
+      getMethod(payment),
+      getStatus(payment),
+      getDate(payment) ?? "",
+    ]);
+
+    const escapeCsv = (value) =>
+      `"${String(value ?? "").replace(/"/g, '""')}"`;
+
+    const csv = [headers, ...rows]
+      .map((row) => row.map(escapeCsv).join(","))
+      .join("\r\n");
+
+    const blob = new Blob(["\uFEFF" + csv], {
+      type: "text/csv;charset=utf-8;",
+    });
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = "parkwise-payments.csv";
+    link.click();
+
+    URL.revokeObjectURL(url);
   }
 
-  const spaceColumns = [
-    { label: 'Zone', value: space => text(space.zone) },
-    { label: 'Bay', value: space => text(space.bay_number) },
-    { label: 'Status', value: space => text(space.status) },
-    { label: 'Space ID', value: space => text(space.id) },
-  ];
-
-  const sessionColumns = [
-    { label: 'Session ID', value: session => text(session.id) },
-    {
-      label: 'Vehicle',
-      value: session => text(session.vehicle_registration_number),
-    },
-    {
-      label: 'Driver',
-      value: session => text(session.users?.full_name),
-    },
-    {
-      label: 'Driver email',
-      value: session => text(session.users?.email),
-    },
-    {
-      label: 'Bay',
-      value: session =>
-        [
-          session.parking_spaces?.zone,
-          session.parking_spaces?.bay_number,
-        ]
-          .filter(Boolean)
-          .join(' - ') || '—',
-    },
-    {
-      label: 'Entry time',
-      value: session => date(session.entry_time),
-    },
-  ];
-
   return (
-    <div className="page">
-      <div
-        className="title"
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: 16,
-          flexWrap: 'wrap',
-        }}
-      >
+    <main className="payments-page">
+      <header className="payments-header">
         <div>
-          <h1>{title}</h1>
-          <p>ParkWise administrator workspace</p>
-          {lastUpdated && (
-            <small>Last refreshed: {lastUpdated.toLocaleTimeString()}</small>
-          )}
+          <p className="payments-eyebrow">
+            PARKWISE ADMINISTRATION
+          </p>
+          <h1>Payments</h1>
+          <p className="payments-subtitle">
+            Monitor parking payment transactions and their
+            recorded statuses.
+          </p>
         </div>
 
-        {(needsSpaces || needsSessions) && (
+        <button
+          type="button"
+          className="payments-button"
+          onClick={loadPayments}
+          disabled={loading}
+        >
+          {loading ? "Refreshing..." : "Refresh"}
+        </button>
+      </header>
+
+      {error && (
+        <section className="panel payments-error" role="alert">
+          <h2>Payments could not be loaded</h2>
+          <p>{error}</p>
+          <p>
+            Expected endpoint: <code>{PAYMENT_ENDPOINT}</code>.
+            This path must match a real route in your backend.
+          </p>
           <button
             type="button"
-            className="primary"
-            onClick={load}
-            disabled={loading}
+            className="payments-button"
+            onClick={loadPayments}
           >
-            {loading ? 'Refreshing…' : 'Refresh data'}
+            Try again
           </button>
-        )}
-      </div>
+        </section>
+      )}
 
-      {error && <Notice type="error">{error}</Notice>}
-
-      {loading && <p role="status">Loading live data from ParkWise…</p>}
-
-      {!loading && !error && needsSpaces && availability && (
+      {!error && !loading && (
         <>
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(155px, 1fr))',
-              gap: 14,
-              marginBottom: 20,
-            }}
-          >
-            <StatCard
-              label="Total spaces"
-              value={availability.total_spaces ?? '—'}
-              description="Reported by the backend"
+          <section className="payments-summary">
+            <SummaryCard
+              title="Total transactions"
+              value={totals.count}
+              description="Records returned by the backend"
             />
-            <StatCard
-              label="Available"
-              value={availability.available_count ?? availableSpaces.length}
-              description="Currently returned as available"
+
+            <SummaryCard
+              title="Payments received"
+              value={formatMoney(totals.received)}
+              description="Records marked paid or successful"
             />
-            <StatCard
-              label="Occupied"
-              value={availability.occupied_count ?? '—'}
-              description="Reported by the backend"
+
+            <SummaryCard
+              title="Pending payments"
+              value={totals.pendingCount}
+              description="Awaiting a recorded final status"
             />
-            <StatCard
-              label="Disabled"
-              value={availability.disabled_count ?? '—'}
-              description="Reported by the backend"
+
+            <SummaryCard
+              title="Failed or cancelled"
+              value={totals.failedCount}
+              description="Transactions not marked successful"
             />
-          </div>
+          </section>
 
-          {title === 'Parking Slots' && (
-            <section className="panel">
-              <h2>Available parking bays</h2>
-              <p>
-                This endpoint returns available bays only. It does not provide
-                a complete list of occupied or disabled bay records.
-              </p>
-
-              <input
-                type="search"
-                value={search}
-                onChange={event => setSearch(event.target.value)}
-                placeholder="Search zone, bay or ID…"
-                aria-label="Search available parking bays"
-                style={{
-                  padding: 12,
-                  width: '100%',
-                  maxWidth: 420,
-                  margin: '8px 0 16px',
-                }}
-              />
-
-              <div
-                style={{
-                  display: 'flex',
-                  gap: 10,
-                  flexWrap: 'wrap',
-                  marginBottom: 16,
-                }}
-              >
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() =>
-                    downloadCsv(
-                      'parkwise-available-bays.csv',
-                      filteredSpaces,
-                      spaceColumns
-                    )
-                  }
-                >
-                  Export available bays CSV
-                </button>
-
-                <span>
-                  Showing {filteredSpaces.length} of {availableSpaces.length}
-                </span>
+          <section className="panel payments-table-panel">
+            <div className="payments-table-heading">
+              <div>
+                <h2>Transaction history</h2>
+                <p>
+                  Showing {filteredPayments.length} of{" "}
+                  {payments.length} records
+                </p>
               </div>
-
-              <DataTable
-                rows={filteredSpaces}
-                columns={spaceColumns}
-                emptyMessage="No available bays match your search."
-              />
-
-              <Notice>
-                Adding, editing, deleting, and changing bay status are not
-                enabled because the confirmed backend does not provide the
-                required management endpoints.
-              </Notice>
-            </section>
-          )}
-
-          {title === 'Parking Lots' && (
-            <section className="panel">
-              <h2>Zones with available bays</h2>
-              <p>
-                These are zones derived from available parking bays. They are
-                not a list of separately stored parking-lot records.
-              </p>
-
-              <input
-                type="search"
-                value={search}
-                onChange={event => setSearch(event.target.value)}
-                placeholder="Search zones…"
-                aria-label="Search parking zones"
-                style={{
-                  padding: 12,
-                  width: '100%',
-                  maxWidth: 420,
-                  margin: '8px 0 16px',
-                }}
-              />
 
               <button
                 type="button"
-                className="secondary-button"
-                onClick={() =>
-                  downloadCsv(
-                    'parkwise-available-zones.csv',
-                    filteredZones,
-                    [
-                      { label: 'Zone', value: zone => zone.zone },
-                      {
-                        label: 'Available bays',
-                        value: zone => zone.available,
-                      },
-                      {
-                        label: 'Bay numbers',
-                        value: zone => zone.bays.join('; '),
-                      },
-                    ]
-                  )
-                }
+                className="payments-button payments-button-secondary"
+                onClick={exportCsv}
+                disabled={filteredPayments.length === 0}
               >
-                Export zones CSV
+                Export CSV
               </button>
+            </div>
 
-              <DataTable
-                rows={filteredZones}
-                columns={[
-                  { label: 'Zone', value: zone => zone.zone },
-                  {
-                    label: 'Available bays',
-                    value: zone => zone.available,
-                  },
-                  {
-                    label: 'Bay numbers',
-                    value: zone => zone.bays.join(', ') || '—',
-                  },
-                ]}
-                emptyMessage="No zones with available bays were found."
+            <div className="payments-filters">
+              <input
+                type="search"
+                value={search}
+                onChange={(event) =>
+                  setSearch(event.target.value)
+                }
+                placeholder="Search ID, reference, method..."
+                aria-label="Search payments"
               />
 
-              <Notice>
-                Actual parking-lot create, edit, and delete operations require
-                a dedicated parking-lot API and a confirmed database schema.
-              </Notice>
-            </section>
-          )}
+              <select
+                value={statusFilter}
+                onChange={(event) =>
+                  setStatusFilter(event.target.value)
+                }
+                aria-label="Filter by payment status"
+              >
+                <option value="all">All statuses</option>
+                <option value="completed">Completed</option>
+                <option value="successful">Successful</option>
+                <option value="paid">Paid</option>
+                <option value="pending">Pending</option>
+                <option value="failed">Failed</option>
+                <option value="cancelled">Cancelled</option>
+                <option value="refunded">Refunded</option>
+              </select>
+            </div>
+
+            <div className="payments-table-wrapper">
+              <table className="payments-table">
+                <thead>
+                  <tr>
+                    <th>Payment ID</th>
+                    <th>Reference</th>
+                    <th>Amount</th>
+                    <th>Method</th>
+                    <th>Status</th>
+                    <th>Date</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {filteredPayments.map((payment, index) => (
+                    <tr
+                      key={`${getPaymentId(payment)}-${index}`}
+                    >
+                      <td>{getPaymentId(payment)}</td>
+                      <td>{getReference(payment)}</td>
+                      <td>{formatMoney(getAmount(payment))}</td>
+                      <td>{getMethod(payment)}</td>
+                      <td>
+                        <StatusBadge
+                          status={getStatus(payment)}
+                        />
+                      </td>
+                      <td>{formatDate(getDate(payment))}</td>
+                    </tr>
+                  ))}
+
+                  {filteredPayments.length === 0 && (
+                    <tr>
+                      <td
+                        colSpan={6}
+                        className="payments-empty"
+                      >
+                        {payments.length === 0
+                          ? "No payment records were returned."
+                          : "No transactions match your search."}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <p className="payments-footnote">
+              Totals are calculated from the records returned by
+              the backend. Confirm that payment statuses are
+              verified by the payment provider before relying on
+              these figures as actual revenue.
+            </p>
+          </section>
         </>
       )}
 
-      {!loading && !error && title === 'Bookings' && (
-        <section className="panel">
-          <h2>Active parking sessions</h2>
-          <Notice>
-            The confirmed endpoint returns active parking sessions, not a
-            complete reservation or booking history. Completed sessions cannot
-            be shown here unless the backend provides a history endpoint.
-          </Notice>
-
-          <input
-            type="search"
-            value={search}
-            onChange={event => setSearch(event.target.value)}
-            placeholder="Search session, driver, vehicle or bay…"
-            aria-label="Search active sessions"
-            style={{
-              padding: 12,
-              width: '100%',
-              maxWidth: 460,
-              margin: '8px 0 16px',
-            }}
-          />
-
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 12,
-              flexWrap: 'wrap',
-              marginBottom: 16,
-            }}
-          >
-            <StatCard
-              label="Active sessions"
-              value={sessions.length}
-              description="Live backend result"
-            />
-
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() =>
-                downloadCsv(
-                  'parkwise-active-sessions.csv',
-                  filteredSessions,
-                  sessionColumns
-                )
-              }
-            >
-              Export active sessions CSV
-            </button>
-          </div>
-
-          <DataTable
-            rows={filteredSessions}
-            columns={sessionColumns}
-            emptyMessage="No active sessions match your search."
-          />
+      {loading && (
+        <section className="panel payments-loading">
+          Loading payment records...
         </section>
       )}
 
-      {!loading && !error && title === 'Drivers' && (
-        <section className="panel">
-          <h2>Driver management</h2>
-          <Notice>
-            A complete driver directory cannot be loaded from the active-session
-            endpoint. The backend needs an admin-protected users endpoint, such
-            as GET /api/admin/users, before this page can safely show all
-            registered drivers.
-          </Notice>
-          <p>
-            This page does not create fake driver records or offer edit/delete
-            controls that cannot save to the database.
-          </p>
-        </section>
-      )}
+      <style>{`
+        .payments-page {
+          display: grid;
+          gap: 24px;
+          padding-bottom: 32px;
+          color: var(--text, inherit);
+        }
 
-      {!loading && !error && title === 'Vehicles' && (
-        <section className="panel">
-          <h2>Vehicle management</h2>
-          <Notice>
-            The confirmed active-session response can show vehicles currently
-            parked, but it is not a complete vehicle register. A dedicated
-            vehicle endpoint and confirmed vehicle schema are needed for a
-            reliable list and persistent management.
-          </Notice>
-        </section>
-      )}
+        .payments-header,
+        .payments-table-heading {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 16px;
+          flex-wrap: wrap;
+        }
 
-      {!loading && !error && title === 'Payments' && (
-        <section className="panel">
-          <h2>Payment management</h2>
-          <Notice>
-            A completed parking fee is not proof that a payment was received.
-            A verified payment-history endpoint is required before this page
-            can display transaction records or calculate actual revenue.
-          </Notice>
-          <p>
-            Payment processing, verification, refunds, and receipt history
-            are not enabled by this frontend component.
-          </p>
-        </section>
-      )}
+        .payments-header h1 {
+          margin: 4px 0 8px;
+          font-size: clamp(1.8rem, 4vw, 2.5rem);
+        }
 
-      {needsTicket && (
-        <section className="panel">
-          <h2>QR ticket management</h2>
-          <p>
-            Enter the real parking session ID to request its ticket from the
-            backend. Use the generate action only when the ticket controller's
-            required payload and authorization have been confirmed.
-          </p>
+        .payments-eyebrow {
+          margin: 0;
+          font-size: 0.75rem;
+          letter-spacing: 0.14em;
+          font-weight: 700;
+          color: #9b78ff;
+        }
 
-          <label
-            htmlFor="ticket-session-id"
-            style={{ display: 'block', marginBottom: 8 }}
-          >
-            Parking session ID
-          </label>
+        .payments-subtitle,
+        .payments-table-heading p,
+        .payments-summary-description,
+        .payments-footnote {
+          color: var(--muted, #888);
+          line-height: 1.5;
+        }
 
-          <input
-            id="ticket-session-id"
-            value={sessionId}
-            onChange={event => setSessionId(event.target.value)}
-            placeholder="Enter parking session ID"
-            style={{
-              padding: 12,
-              width: '100%',
-              maxWidth: 420,
-              marginBottom: 12,
-            }}
-          />
+        .payments-button {
+          border: 0;
+          border-radius: 10px;
+          padding: 11px 16px;
+          background: #7c3aed;
+          color: white;
+          font-weight: 600;
+          cursor: pointer;
+        }
 
-          <div
-            style={{
-              display: 'flex',
-              gap: 10,
-              flexWrap: 'wrap',
-              marginBottom: 12,
-            }}
-          >
-            <button
-              type="button"
-              className="primary"
-              disabled={ticketLoading}
-              onClick={() => ticketAction('find')}
-            >
-              {ticketLoading ? 'Please wait…' : 'Find ticket'}
-            </button>
+        .payments-button:disabled {
+          opacity: 0.55;
+          cursor: not-allowed;
+        }
 
-            <button
-              type="button"
-              className="secondary-button"
-              disabled={ticketLoading}
-              onClick={() => ticketAction('generate')}
-            >
-              Generate ticket
-            </button>
-          </div>
+        .payments-button-secondary {
+          background: transparent;
+          border: 1px solid var(--border, #444);
+          color: var(--text, inherit);
+        }
 
-          {ticketError && <Notice type="error">{ticketError}</Notice>}
-          {ticketMessage && <Notice type="success">{ticketMessage}</Notice>}
+        .payments-summary {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 16px;
+        }
 
-          {ticket && (
-            <div style={{ marginTop: 20 }}>
-              <h3>Ticket details</h3>
+        .payment-summary-card {
+          min-width: 0;
+          padding: 20px;
+          border: 1px solid var(--border, #333);
+          border-radius: 14px;
+        }
 
-              <p>
-                <strong>Ticket code:</strong>{' '}
-                {text(ticket.ticket_code)}
-              </p>
+        .payment-summary-label {
+          margin: 0 0 12px;
+          color: var(--muted, #888);
+          font-size: 0.9rem;
+        }
 
-              <p>
-                <strong>Session ID:</strong>{' '}
-                {text(ticket.session_id || sessionId)}
-              </p>
+        .payment-summary-value {
+          margin: 0 0 8px;
+          font-size: clamp(1.2rem, 2vw, 1.8rem);
+          overflow-wrap: anywhere;
+        }
 
-              <p>
-                <strong>Status:</strong>{' '}
-                {text(ticket.status)}
-              </p>
+        .payment-summary-description {
+          margin: 0;
+          font-size: 0.8rem;
+        }
 
-              {typeof ticket.qr_code_url === 'string' &&
-                ticket.qr_code_url.startsWith('data:image/') && (
-                  <img
-                    src={ticket.qr_code_url}
-                    alt="Parking ticket QR code"
-                    style={{
-                      width: 220,
-                      maxWidth: '100%',
-                      background: '#fff',
-                      padding: 10,
-                      borderRadius: 8,
-                    }}
-                  />
-                )}
+        .payments-table-panel {
+          min-width: 0;
+          padding: 20px;
+          border: 1px solid var(--border, #333);
+          border-radius: 14px;
+        }
 
-              {typeof ticket.qr_code_url === 'string' &&
-                ticket.qr_code_url.startsWith('https://') && (
-                  <img
-                    src={ticket.qr_code_url}
-                    alt="Parking ticket QR code"
-                    style={{
-                      width: 220,
-                      maxWidth: '100%',
-                      background: '#fff',
-                      padding: 10,
-                      borderRadius: 8,
-                    }}
-                  />
-                )}
+        .payments-table-heading h2 {
+          margin: 0 0 6px;
+        }
 
-              <div style={{ marginTop: 16 }}>
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() => window.print()}
-                >
-                  Print ticket details
-                </button>
-              </div>
-            </div>
-          )}
+        .payments-table-heading p {
+          margin: 0;
+          font-size: 0.9rem;
+        }
 
-          <Notice>
-            Ticket generation is only fully working when the backend confirms
-            that the ticket was created, stored, and can be retrieved. The
-            frontend cannot verify those database operations on its own.
-          </Notice>
-        </section>
-      )}
-    </div>
+        .payments-filters {
+          display: flex;
+          gap: 12px;
+          margin: 22px 0;
+          flex-wrap: wrap;
+        }
+
+        .payments-filters input,
+        .payments-filters select {
+          min-width: 180px;
+          max-width: 100%;
+          padding: 11px 12px;
+          border-radius: 9px;
+          border: 1px solid var(--border, #444);
+          background: var(--surface, transparent);
+          color: var(--text, inherit);
+        }
+
+        .payments-filters input {
+          flex: 1;
+        }
+
+        .payments-table-wrapper {
+          width: 100%;
+          overflow-x: auto;
+        }
+
+        .payments-table {
+          width: 100%;
+          border-collapse: collapse;
+          text-align: left;
+        }
+
+        .payments-table th,
+        .payments-table td {
+          padding: 14px 12px;
+          border-bottom: 1px solid var(--border, #333);
+          white-space: nowrap;
+        }
+
+        .payments-table th {
+          font-size: 0.78rem;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          color: var(--muted, #888);
+        }
+
+        .payment-status {
+          display: inline-block;
+          border-radius: 999px;
+          padding: 5px 9px;
+          background: #555;
+          color: white;
+          font-size: 0.78rem;
+          font-weight: 600;
+        }
+
+        .payment-status-success {
+          background: #166534;
+        }
+
+        .payment-status-pending {
+          background: #854d0e;
+        }
+
+        .payment-status-failed {
+          background: #991b1b;
+        }
+
+        .payment-status-refunded {
+          background: #5b21b6;
+        }
+
+        .payments-empty {
+          padding: 30px 12px !important;
+          text-align: center;
+          color: var(--muted, #888);
+        }
+
+        .payments-footnote {
+          margin: 18px 0 0;
+          font-size: 0.82rem;
+        }
+
+        .payments-error {
+          padding: 20px;
+          border: 1px solid #b91c1c;
+          border-radius: 12px;
+        }
+
+        .payments-error code {
+          overflow-wrap: anywhere;
+        }
+
+        .payments-loading {
+          padding: 28px;
+          text-align: center;
+        }
+
+        @media (max-width: 1000px) {
+          .payments-summary {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+
+        @media (max-width: 560px) {
+          .payments-summary {
+            grid-template-columns: 1fr;
+          }
+
+          .payments-table-panel {
+            padding: 14px;
+          }
+
+          .payments-filters input,
+          .payments-filters select {
+            width: 100%;
+            min-width: 0;
+          }
+        }
+      `}</style>
+    </main>
   );
 }
