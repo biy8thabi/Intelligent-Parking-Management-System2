@@ -1,218 +1,150 @@
 
-import { Routes, Route, Navigate } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from 'react';
+import {
+  BrowserRouter,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+} from 'react-router-dom';
 
-import Login from "./pages/Login";
-import Layout from "./components/Layout";
-import Dashboard from "./pages/Dashboard";
-import CrudPage from "./pages/CrudPage";
-import Settings from "./pages/Settings";
-import FeeCalculator from "./pages/FeeCalculator";
-import Sessions from "./pages/Sessions";
-import Reports from "./pages/Reports";
-import Drivers from "./pages/Drivers";
+import Layout from './components/Layout';
+import Login from './pages/Login';
+import Dashboard from './pages/Dashboard';
+import Sessions from './pages/Sessions';
+import CrudPage from './pages/CrudPage';
+import FeeCalculator from './pages/FeeCalculator';
+import Reports from './pages/Reports';
+import Settings from './pages/Settings';
+import { request } from './services/api';
 
-import { getAdminProfile } from "./services/api";
+const TOKEN_KEY = 'pw_admin_token';
 
-const names = [
-  "Parking Lots",
-  "Parking Slots",
-  "Vehicles",
-  "Bookings",
-  "Payments",
-  "QR Tickets",
-];
+function ProtectedLayout({ onLogout }) {
+  const location = useLocation();
+  const [checking, setChecking] = useState(true);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [error, setError] = useState('');
 
-export default function App() {
-  const [token, setToken] = useState(() =>
-    sessionStorage.getItem("pw_admin_token")
-  );
-
-  const [admin, setAdmin] = useState(null);
-  const [checking, setChecking] = useState(Boolean(token));
-
-  const [theme, setTheme] = useState(
-    () => localStorage.getItem("pw_theme") || "dark"
-  );
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    localStorage.setItem("pw_theme", theme);
-  }, [theme]);
-
-  useEffect(() => {
-    let active = true;
+  const verifySession = useCallback(async () => {
+    const token = sessionStorage.getItem(TOKEN_KEY);
 
     if (!token) {
-      setAdmin(null);
+      setAuthenticated(false);
       setChecking(false);
-
-      return () => {
-        active = false;
-      };
+      return;
     }
 
     setChecking(true);
+    setError('');
 
-    getAdminProfile(token)
-      .then((data) => {
-        if (!active) return;
+    try {
+      await request('/api/auth/me', { token });
+      setAuthenticated(true);
+    } catch (err) {
+      sessionStorage.removeItem(TOKEN_KEY);
+      setAuthenticated(false);
+      setError(err.message || 'Please sign in again.');
+    } finally {
+      setChecking(false);
+    }
+  }, []);
 
-        if (!data.admin || data.admin.role !== "admin") {
-          throw new Error("Not an administrator");
-        }
-
-        setAdmin(data.admin);
-        setChecking(false);
-      })
-      .catch(() => {
-        if (!active) return;
-
-        sessionStorage.removeItem("pw_admin_token");
-        setToken(null);
-        setAdmin(null);
-        setChecking(false);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [token]);
-
-  const logout = () => {
-    sessionStorage.removeItem("pw_admin_token");
-    setToken(null);
-    setAdmin(null);
-  };
+  useEffect(() => {
+    verifySession();
+  }, [verifySession, location.pathname]);
 
   if (checking) {
     return (
-      <div className="page">
-        <h2>Verifying administrator access…</h2>
-      </div>
+      <main className="page">
+        <p role="status">Checking administrator session…</p>
+      </main>
     );
   }
 
-  if (!token || !admin) {
+  if (!authenticated) {
     return (
-      <Login
-        onLogin={(value) => {
-          sessionStorage.setItem("pw_admin_token", value);
-          setToken(value);
-        }}
+      <Navigate
+        to="/login"
+        replace
+        state={{ from: location, message: error }}
       />
     );
   }
+
+  return <Layout onLogout={onLogout} />;
+}
+
+function AppRoutes() {
+  const [loginVersion, setLoginVersion] = useState(0);
+
+  const logout = useCallback(() => {
+    sessionStorage.removeItem(TOKEN_KEY);
+    setLoginVersion(version => version + 1);
+    window.location.replace('/login');
+  }, []);
 
   return (
     <Routes>
       <Route
-        path="/"
+        path="/login"
         element={
-          <Layout
-            theme={theme}
-            onThemeChange={setTheme}
-            onLogout={logout}
-            admin={admin}
+          <Login
+            key={loginVersion}
           />
         }
-      >
-        <Route
-          index
-          element={
-            <Dashboard
-              token={token}
-              onUnauthorised={logout}
-            />
-          }
-        />
-
-        <Route
-          path="active-sessions"
-          element={
-            <Sessions
-              token={token}
-              onUnauthorised={logout}
-            />
-          }
-        />
-
-        <Route
-          path="reports"
-          element={
-            <Reports
-              token={token}
-              onUnauthorised={logout}
-            />
-          }
-        />
-
-        <Route
-          path="drivers"
-          element={
-            <Drivers
-              token={token}
-              onUnauthorised={logout}
-            />
-          }
-        />
-
-        {names.map((name) => (
-          <Route
-            key={name}
-            path={name.toLowerCase().replaceAll(" ", "-")}
-            element={<CrudPage title={name} />}
-          />
-        ))}
-
-        <Route
-          path="settings"
-          element={
-            <Settings
-              theme={theme}
-              onThemeChange={setTheme}
-            />
-          }
-        />
-
-        <Route
-          path="fee-calculator"
-          element={<FeeCalculator />}
-        />
-
-        <Route
-          path="admin-profile"
-          element={
-            <div className="page">
-              <h1>Admin Profile</h1>
-
-              <section className="panel">
-                <p>
-                  <b>Name:</b> {admin.full_name}
-                </p>
-
-                <p>
-                  <b>Email:</b> {admin.email}
-                </p>
-
-                <p>
-                  <b>Role:</b> {admin.role}
-                </p>
-
-                <p>
-                  Profile editing is not supported by the
-                  documented backend API.
-                </p>
-              </section>
-            </div>
-          }
-        />
-      </Route>
+      />
 
       <Route
-        path="*"
-        element={<Navigate to="/" replace />}
-      />
+        element={<ProtectedLayout onLogout={logout} />}
+      >
+        <Route index element={<Dashboard />} />
+        <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/sessions" element={<Sessions />} />
+
+        <Route
+          path="/parking-lots"
+          element={<CrudPage title="Parking Lots" />}
+        />
+        <Route
+          path="/parking-slots"
+          element={<CrudPage title="Parking Slots" />}
+        />
+        <Route
+          path="/bookings"
+          element={<CrudPage title="Bookings" />}
+        />
+        <Route
+          path="/drivers"
+          element={<CrudPage title="Drivers" />}
+        />
+        <Route
+          path="/vehicles"
+          element={<CrudPage title="Vehicles" />}
+        />
+        <Route
+          path="/payments"
+          element={<CrudPage title="Payments" />}
+        />
+        <Route
+          path="/qr-tickets"
+          element={<CrudPage title="QR Tickets" />}
+        />
+
+        <Route path="/fee-calculator" element={<FeeCalculator />} />
+        <Route path="/reports" element={<Reports />} />
+        <Route path="/settings" element={<Settings />} />
+      </Route>
+
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+  );
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AppRoutes />
+    </BrowserRouter>
   );
 }
