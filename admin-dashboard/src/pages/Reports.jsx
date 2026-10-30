@@ -1,81 +1,153 @@
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { getParkingAvailability } from "../services/api";
+
+const API_URL = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+
+function getVehicle(session) {
+  return (
+    session.vehicle_registration ??
+    session.registration_number ??
+    session.vehicle_plate ??
+    "Not supplied"
+  );
+}
+
+function getDriver(session) {
+  return (
+    session.driver_name ??
+    session.user?.full_name ??
+    session.driver?.full_name ??
+    "Not supplied"
+  );
+}
+
+function escapeCSV(value) {
+  const text = String(value ?? "");
+  // Protect spreadsheet programs against CSV formula injection.
+  const safe = /^[\s]*[=+\-@\t\r]/.test(text) ? "'" + text : text;
+  return `"${safe.replace(/"/g, '""')}"`;
+}
+
+function downloadCSV(filename, rows) {
+  const csv = rows.map((row) => row.map(escapeCSV).join(",")).join("\r\n");
+  const blob = new Blob(["\uFEFF", csv], {
+    type: "text/csv;charset=utf-8",
+  });
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 export default function Reports({ token, onUnauthorised }) {
   const [availability, setAvailability] = useState(null);
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [sessionError, setSessionError] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+  const [availabilityError, setAvailabilityError] = useState("");
+  const [sessionsError, setSessionsError] = useState("");
   const [reportType, setReportType] = useState("occupancy");
   const [search, setSearch] = useState("");
+  const [lastUpdated, setLastUpdated] = useState(null);
 
-  useEffect(() => {
-    let active = true;
-
-    async function loadReports() {
-      setLoading(true);
-      setError("");
-      setSessionError("");
-
-      try {
-        const data = await getParkingAvailability();
-
-        if (active) {
-          setAvailability(data);
-        }
-      } catch (err) {
-        if (active) {
-          setError(err.message || "Could not load parking availability.");
-        }
+  const loadReports = useCallback(
+    async (signal, isRefresh = false) => {
+      if (isRefresh) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
       }
 
-      try {
-        const response = await fetch(
-          `${import.meta.env.VITE_API_URL}/api/admin/sessions/active`,
-          {
+      setAvailabilityError("");
+      setSessionsError("");
+
+      const availabilityRequest = getParkingAvailability();
+
+      const sessionsRequest = API_URL
+        ? fetch(`${API_URL}/api/admin/sessions/active`, {
+            signal,
             headers: {
               Authorization: `Bearer ${token}`,
             },
-          }
-        );
+          }).then(async (response) => {
+            if (response.status === 401 || response.status === 403) {
+              const error = new Error("Your admin session is not authorised.");
+              error.unauthorised = true;
+              throw error;
+            }
 
-        if (response.status === 401 || response.status === 403) {
-          if (active && onUnauthorised) onUnauthorised();
-          return;
-        }
+            if (!response.ok) {
+              throw new Error(
+                `Could not load sessions (HTTP ${response.status}).`
+              );
+            }
 
-        if (!response.ok) {
-          throw new Error("The sessions report is unavailable.");
-        }
+            const data = await response.json();
+            const records = Array.isArray(data)
+              ? data
+              : data.sessions ?? data.data ?? [];
 
-        const data = await response.json();
+            if (!Array.isArray(records)) {
+              throw new Error("Unexpected sessions response from backend.");
+            }
 
-        if (active) {
-          const records = Array.isArray(data)
-            ? data
-            : data.sessions || data.data || [];
-
-          setSessions(Array.isArray(records) ? records : []);
-        }
-      } catch (err) {
-        if (active) {
-          setSessionError(
-            err.message || "Could not load active parking sessions."
+            return records;
+          })
+        : Promise.reject(
+            new Error("The backend API URL is not configured.")
           );
-        }
-      } finally {
-        if (active) setLoading(false);
+
+      const [availabilityResult, sessionsResult] =
+        await Promise.allSettled([
+          availabilityRequest,
+          sessionsRequest,
+        ]);
+
+      if (signal?.aborted) return;
+
+      if (availabilityResult.status === "fulfilled") {
+        setAvailability(availabilityResult.value);
+      } else {
+        setAvailability(null);
+        setAvailabilityError(
+          availabilityResult.reason?.message ||
+            "Could not load parking availability."
+        );
       }
-    }
 
-    loadReports();
+      if (sessionsResult.status === "fulfilled") {
+        setSessions(sessionsResult.value);
+      } else {
+        setSessions([]);
+        if (sessionsResult.reason?.unauthorised) {
+          onUnauthorised?.();
+        }
+        setSessionsError(
+          sessionsResult.reason?.message ||
+            "Could not load parking sessions."
+        );
+      }
 
-    return () => {
-      active = false;
-    };
-  }, [token, onUnauthorised]);
+      setLastUpdated(new Date());
+      setLoading(false);
+      setRefreshing(false);
+    },
+    [token, onUnauthorised]
+  );
+
+  useEffect(() => {
+    const controller = new AbortController();
+    loadReports(controller.signal);
+
+    return () => controller.abort();
+  }, [loadReports]);
 
   const totalSpaces = Number(availability?.total_spaces ?? 0);
   const availableSpaces = Number(availability?.available_count ?? 0);
@@ -84,7 +156,7 @@ export default function Reports({ token, onUnauthorised }) {
 
   const occupancyRate =
     totalSpaces > 0
-      ? Math.round((occupiedSpaces / totalSpaces) * 100)
+      ? Math.min(100, Math.max(0, (occupiedSpaces / totalSpaces) * 100))
       : 0;
 
   const filteredSessions = useMemo(() => {
@@ -95,92 +167,120 @@ export default function Reports({ token, onUnauthorised }) {
     return sessions.filter((session) =>
       [
         session.id,
-        session.vehicle_registration,
-        session.registration_number,
-        session.vehicle_plate,
-        session.driver_name,
+        getVehicle(session),
+        getDriver(session),
         session.status,
-      ]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(term))
+      ].some((value) =>
+        String(value ?? "").toLowerCase().includes(term)
+      )
     );
   }, [sessions, search]);
 
-  function downloadCSV() {
-    let rows = [];
+  const reportNames = {
+    occupancy: "Parking Occupancy",
+    sessions: "Active Parking Sessions",
+    revenue: "Revenue",
+  };
+
+  const canExport =
+    !loading &&
+    (reportType === "occupancy"
+      ? Boolean(availability)
+      : reportType === "sessions"
+        ? !sessionsError
+        : false);
+
+  function exportReport() {
+    if (!canExport) return;
+
+    const generated = new Date().toLocaleString("en-ZA");
+    let rows;
 
     if (reportType === "occupancy") {
       rows = [
-        ["Parking Occupancy Report"],
-        ["Generated", new Date().toLocaleString("en-ZA")],
+        ["ParkWise Parking Occupancy Report"],
+        ["Generated", generated],
         [],
         ["Metric", "Value"],
         ["Total spaces", totalSpaces],
         ["Available spaces", availableSpaces],
         ["Occupied spaces", occupiedSpaces],
         ["Disabled spaces", disabledSpaces],
-        ["Occupancy rate (%)", occupancyRate],
+        ["Occupancy rate (%)", occupancyRate.toFixed(1)],
       ];
-    } else if (reportType === "sessions") {
+    } else {
       rows = [
-        ["Active Parking Sessions Report"],
-        ["Generated", new Date().toLocaleString("en-ZA")],
+        ["ParkWise Active Parking Sessions Report"],
+        ["Generated", generated],
         [],
-        ["Session ID", "Vehicle Registration", "Driver", "Status"],
+        ["Session ID", "Vehicle", "Driver", "Status"],
         ...filteredSessions.map((session) => [
           session.id ?? "",
-          session.vehicle_registration ??
-            session.registration_number ??
-            session.vehicle_plate ??
-            "",
-          session.driver_name ?? "",
+          getVehicle(session),
+          getDriver(session),
           session.status ?? "Active",
         ]),
       ];
-    } else {
-      alert(
-        "A revenue report cannot be generated until the backend provides verified payment or revenue data."
-      );
-      return;
     }
 
-    const csv = rows
-      .map((row) =>
-        row
-          .map((value) => {
-            const text = String(value ?? "");
-            return `"${text.replace(/"/g, '""')}"`;
-          })
-          .join(",")
-      )
-      .join("\r\n");
-
-    const blob = new Blob(["\uFEFF" + csv], {
-      type: "text/csv;charset=utf-8;",
-    });
-
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-
-    link.href = url;
-    link.download = `parkwise-${reportType}-report-${new Date()
-      .toISOString()
-      .slice(0, 10)}.csv`;
-
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
+    downloadCSV(
+      `parkwise-${reportType}-${new Date().toISOString().slice(0, 10)}.csv`,
+      rows
+    );
   }
 
-  const money = (value) =>
-    new Intl.NumberFormat("en-ZA", {
-      style: "currency",
-      currency: "ZAR",
-    }).format(value);
+  function printReport() {
+    if (!canExport) return;
+    window.print();
+  }
+
+  const buttonStyle = {
+    padding: "11px 16px",
+    borderRadius: "10px",
+    border: "1px solid #7c3aed",
+    cursor: "pointer",
+    fontWeight: 600,
+  };
+
+  const panelStyle = {
+    padding: "22px",
+    borderRadius: "14px",
+  };
 
   return (
     <div className="page">
+      <style>{`
+        @media print {
+          body {
+            background: white !important;
+            color: black !important;
+          }
+
+          .report-actions,
+          .report-tabs,
+          .report-search {
+            display: none !important;
+          }
+
+          .page {
+            color: black !important;
+            background: white !important;
+          }
+
+          .panel {
+            color: black !important;
+            background: white !important;
+            border: 1px solid #ddd !important;
+            break-inside: avoid;
+          }
+
+          .report-table th,
+          .report-table td {
+            color: black !important;
+          }
+        }
+      `}</style>
+
       <div
         style={{
           display: "flex",
@@ -195,30 +295,73 @@ export default function Reports({ token, onUnauthorised }) {
           <p style={{ color: "#a78bfa", marginBottom: "6px" }}>
             PARKWISE / ADMINISTRATION
           </p>
+
           <h1 style={{ margin: 0 }}>Reports</h1>
+
           <p style={{ opacity: 0.75 }}>
             Parking activity and operational performance.
           </p>
+
+          {lastUpdated && (
+            <p style={{ fontSize: "13px", opacity: 0.65 }}>
+              Last refreshed: {lastUpdated.toLocaleString("en-ZA")}
+            </p>
+          )}
         </div>
 
-        <button
-          type="button"
-          onClick={downloadCSV}
+        <div
+          className="report-actions"
           style={{
-            background: "#7c3aed",
-            color: "#fff",
-            border: "none",
-            borderRadius: "10px",
-            padding: "12px 18px",
-            cursor: "pointer",
-            fontWeight: 600,
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "10px",
           }}
         >
-          Export CSV
-        </button>
+          <button
+            type="button"
+            onClick={() => loadReports(undefined, true)}
+            disabled={loading || refreshing}
+            style={{
+              ...buttonStyle,
+              background: "transparent",
+              color: "inherit",
+            }}
+          >
+            {refreshing ? "Refreshing..." : "Refresh"}
+          </button>
+
+          <button
+            type="button"
+            onClick={exportReport}
+            disabled={!canExport}
+            style={{
+              ...buttonStyle,
+              background: "#7c3aed",
+              color: "#fff",
+              opacity: canExport ? 1 : 0.5,
+            }}
+          >
+            Export CSV
+          </button>
+
+          <button
+            type="button"
+            onClick={printReport}
+            disabled={!canExport}
+            style={{
+              ...buttonStyle,
+              background: "#4c1d95",
+              color: "#fff",
+              opacity: canExport ? 1 : 0.5,
+            }}
+          >
+            Print / Save PDF
+          </button>
+        </div>
       </div>
 
       <div
+        className="report-tabs"
         style={{
           display: "flex",
           flexWrap: "wrap",
@@ -236,13 +379,10 @@ export default function Reports({ token, onUnauthorised }) {
             type="button"
             onClick={() => setReportType(item.value)}
             style={{
-              padding: "11px 16px",
-              borderRadius: "10px",
-              border: "1px solid #7c3aed",
+              ...buttonStyle,
               background:
                 reportType === item.value ? "#7c3aed" : "transparent",
               color: reportType === item.value ? "#fff" : "inherit",
-              cursor: "pointer",
             }}
           >
             {item.label}
@@ -250,207 +390,209 @@ export default function Reports({ token, onUnauthorised }) {
         ))}
       </div>
 
-      {loading && <p>Loading report data...</p>}
+      <h2 style={{ marginBottom: "18px" }}>
+        {reportNames[reportType]} Report
+      </h2>
 
-      {error && (
-        <section className="panel" style={{ marginBottom: "16px" }}>
-          <h3>Parking availability unavailable</h3>
-          <p>{error}</p>
-        </section>
-      )}
+      {loading && <p>Loading report data...</p>}
 
       {!loading && reportType === "occupancy" && (
         <>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-              gap: "16px",
-              marginBottom: "24px",
-            }}
-          >
-            {[
-              {
-                label: "Total Spaces",
-                value: availability ? totalSpaces : "—",
-              },
-              {
-                label: "Available Spaces",
-                value: availability ? availableSpaces : "—",
-              },
-              {
-                label: "Occupied Spaces",
-                value: availability ? occupiedSpaces : "—",
-              },
-              {
-                label: "Occupancy Rate",
-                value: availability ? `${occupancyRate}%` : "—",
-              },
-            ].map((item) => (
-              <section
-                className="panel"
-                key={item.label}
-                style={{ padding: "22px" }}
-              >
-                <p style={{ opacity: 0.7, marginTop: 0 }}>
-                  {item.label}
-                </p>
-                <h2 style={{ fontSize: "30px", marginBottom: 0 }}>
-                  {item.value}
-                </h2>
-              </section>
-            ))}
-          </div>
+          {availabilityError && (
+            <section className="panel" style={panelStyle}>
+              <h3>Availability unavailable</h3>
+              <p>{availabilityError}</p>
+            </section>
+          )}
 
-          <section className="panel" style={{ padding: "24px" }}>
-            <h2>Occupancy Overview</h2>
-
-            <div
-              style={{
-                height: "14px",
-                background: "rgba(127,127,127,0.2)",
-                borderRadius: "20px",
-                overflow: "hidden",
-                margin: "20px 0 12px",
-              }}
-            >
+          {availability && (
+            <>
               <div
                 style={{
-                  width: `${occupancyRate}%`,
-                  height: "100%",
-                  background: "#8b5cf6",
-                  borderRadius: "20px",
-                  transition: "width 0.3s ease",
+                  display: "grid",
+                  gridTemplateColumns:
+                    "repeat(auto-fit, minmax(170px, 1fr))",
+                  gap: "16px",
+                  marginBottom: "24px",
                 }}
-              />
-            </div>
+              >
+                {[
+                  { label: "Total Spaces", value: totalSpaces },
+                  { label: "Available", value: availableSpaces },
+                  { label: "Occupied", value: occupiedSpaces },
+                  { label: "Disabled", value: disabledSpaces },
+                  {
+                    label: "Occupancy Rate",
+                    value: `${occupancyRate.toFixed(1)}%`,
+                  },
+                ].map((item) => (
+                  <section
+                    key={item.label}
+                    className="panel"
+                    style={panelStyle}
+                  >
+                    <p style={{ opacity: 0.7, marginTop: 0 }}>
+                      {item.label}
+                    </p>
+                    <h2 style={{ fontSize: "29px", marginBottom: 0 }}>
+                      {item.value}
+                    </h2>
+                  </section>
+                ))}
+              </div>
 
-            <p>
-              {availability
-                ? `${occupiedSpaces} of ${totalSpaces} parking spaces are occupied.`
-                : "Occupancy information could not be loaded."}
-            </p>
+              <section className="panel" style={panelStyle}>
+                <h3>Occupancy Overview</h3>
 
-            <div
-              style={{
-                display: "flex",
-                gap: "20px",
-                flexWrap: "wrap",
-                marginTop: "20px",
-              }}
-            >
-              <span>🟣 Occupied: {occupiedSpaces}</span>
-              <span>🟢 Available: {availableSpaces}</span>
-              <span>⚪ Disabled: {disabledSpaces}</span>
-            </div>
-          </section>
+                <div
+                  style={{
+                    width: "100%",
+                    height: "18px",
+                    background: "rgba(127,127,127,0.2)",
+                    borderRadius: "20px",
+                    overflow: "hidden",
+                    margin: "20px 0 12px",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: `${occupancyRate}%`,
+                      height: "100%",
+                      background: "#8b5cf6",
+                      borderRadius: "20px",
+                    }}
+                  />
+                </div>
+
+                <p>
+                  {occupiedSpaces} of {totalSpaces} parking spaces are
+                  occupied ({occupancyRate.toFixed(1)}%).
+                </p>
+
+                <p>
+                  Available: {availableSpaces} | Occupied: {occupiedSpaces}
+                  {" | "}Disabled: {disabledSpaces}
+                </p>
+              </section>
+            </>
+          )}
         </>
       )}
 
       {!loading && reportType === "sessions" && (
-        <section className="panel" style={{ padding: "24px" }}>
-          <h2>Active Parking Sessions</h2>
-          <p>
-            {sessionError
-              ? sessionError
-              : `${sessions.length} active sessions returned by the backend.`}
-          </p>
+        <section className="panel" style={panelStyle}>
+          {sessionsError ? (
+            <p role="alert">{sessionsError}</p>
+          ) : (
+            <>
+              <p>
+                {sessions.length} active sessions returned by the backend.
+              </p>
 
-          <input
-            type="search"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search by session, vehicle or driver..."
-            aria-label="Search sessions"
-            style={{
-              width: "100%",
-              maxWidth: "420px",
-              boxSizing: "border-box",
-              padding: "12px",
-              margin: "12px 0 20px",
-              borderRadius: "8px",
-              border: "1px solid #777",
-              background: "transparent",
-              color: "inherit",
-            }}
-          />
+              <input
+                className="report-search"
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search session, vehicle or driver..."
+                aria-label="Search parking sessions"
+                style={{
+                  width: "100%",
+                  maxWidth: "420px",
+                  padding: "12px",
+                  margin: "12px 0 20px",
+                  borderRadius: "8px",
+                  border: "1px solid #777",
+                  background: "transparent",
+                  color: "inherit",
+                  boxSizing: "border-box",
+                }}
+              />
 
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr>
-                  {["Session ID", "Vehicle", "Driver", "Status"].map(
-                    (heading) => (
-                      <th
-                        key={heading}
-                        style={{
-                          textAlign: "left",
-                          padding: "12px",
-                          borderBottom: "1px solid #777",
-                        }}
-                      >
-                        {heading}
-                      </th>
-                    )
-                  )}
-                </tr>
-              </thead>
+              <p style={{ fontSize: "13px", opacity: 0.7 }}>
+                Showing {filteredSessions.length} of {sessions.length} sessions.
+              </p>
 
-              <tbody>
-                {filteredSessions.map((session, index) => (
-                  <tr key={session.id ?? index}>
-                    <td style={{ padding: "12px" }}>
-                      {session.id ?? "—"}
-                    </td>
-                    <td style={{ padding: "12px" }}>
-                      {session.vehicle_registration ??
-                        session.registration_number ??
-                        session.vehicle_plate ??
-                        "Not supplied"}
-                    </td>
-                    <td style={{ padding: "12px" }}>
-                      {session.driver_name ?? "Not supplied"}
-                    </td>
-                    <td style={{ padding: "12px" }}>
-                      {session.status ?? "Active"}
-                    </td>
-                  </tr>
-                ))}
+              <div style={{ overflowX: "auto" }}>
+                <table
+                  className="report-table"
+                  style={{
+                    width: "100%",
+                    borderCollapse: "collapse",
+                  }}
+                >
+                  <thead>
+                    <tr>
+                      {["Session ID", "Vehicle", "Driver", "Status"].map(
+                        (heading) => (
+                          <th
+                            key={heading}
+                            style={{
+                              textAlign: "left",
+                              padding: "12px",
+                              borderBottom: "1px solid #777",
+                            }}
+                          >
+                            {heading}
+                          </th>
+                        )
+                      )}
+                    </tr>
+                  </thead>
 
-                {filteredSessions.length === 0 && (
-                  <tr>
-                    <td colSpan={4} style={{ padding: "18px" }}>
-                      {sessionError
-                        ? "Session records are unavailable."
-                        : "No matching active sessions were returned."}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                  <tbody>
+                    {filteredSessions.map((session, index) => (
+                      <tr key={session.id ?? index}>
+                        <td style={{ padding: "12px" }}>
+                          {session.id ?? "—"}
+                        </td>
+                        <td style={{ padding: "12px" }}>
+                          {getVehicle(session)}
+                        </td>
+                        <td style={{ padding: "12px" }}>
+                          {getDriver(session)}
+                        </td>
+                        <td style={{ padding: "12px" }}>
+                          {session.status ?? "Active"}
+                        </td>
+                      </tr>
+                    ))}
+
+                    {filteredSessions.length === 0 && (
+                      <tr>
+                        <td colSpan={4} style={{ padding: "18px" }}>
+                          No matching active sessions.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </section>
       )}
 
       {!loading && reportType === "revenue" && (
-        <section className="panel" style={{ padding: "24px" }}>
-          <h2>Revenue Report</h2>
+        <section className="panel" style={panelStyle}>
+          <h3>Revenue data not connected</h3>
+
           <p>
-            {money(0)} is not displayed as revenue because no verified
-            revenue total has been loaded.
+            A reliable revenue report requires verified payment records
+            or an approved backend revenue endpoint.
           </p>
+
           <p>
-            The current frontend needs a backend endpoint that returns
-            confirmed payment or completed-session fee totals before it
-            can calculate an accurate revenue report.
+            Calculated parking fees do not necessarily mean payments
+            have been received.
           </p>
+
           <p>
-            No revenue figures are fabricated. Once the backend provides
-            those totals, this section can be connected to them.
+            No revenue totals will be displayed or exported until
+            confirmed financial data is available.
           </p>
         </section>
       )}
     </div>
   );
 }
-
