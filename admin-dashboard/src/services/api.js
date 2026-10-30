@@ -4,6 +4,8 @@ const API_BASE = (
   'https://intelligent-parking-management-system2-4.onrender.com'
 ).replace(/\/+$/, '');
 
+export const configured = Boolean(API_BASE);
+
 export async function request(path, options = {}) {
   if (typeof path !== 'string' || !path.startsWith('/')) {
     throw new Error('API paths must start with /.');
@@ -32,7 +34,11 @@ export async function request(path, options = {}) {
     response = await fetch(`${API_BASE}${path}`, {
       ...fetchOptions,
       headers,
-      body,
+      body:
+        body !== undefined && body !== null &&
+        typeof body !== 'string'
+          ? JSON.stringify(body)
+          : body,
     });
   } catch {
     throw new Error(
@@ -41,9 +47,6 @@ export async function request(path, options = {}) {
   }
 
   if (response.status === 204) {
-    if (!response.ok) {
-      throw new Error(`Request failed with HTTP ${response.status}.`);
-    }
     return {};
   }
 
@@ -58,7 +61,6 @@ export async function request(path, options = {}) {
     }
   } else {
     const responseText = await response.text();
-
     data = responseText ? { message: responseText } : {};
   }
 
@@ -84,12 +86,6 @@ export async function request(path, options = {}) {
       );
     }
 
-    if (response.status === 409) {
-      throw new Error(
-        message || 'This action conflicts with the current parking data.'
-      );
-    }
-
     throw new Error(message);
   }
 
@@ -98,4 +94,26 @@ export async function request(path, options = {}) {
 
 export function getApiBaseUrl() {
   return API_BASE;
+}
+
+export async function adminLogin(email, password) {
+  return request('/api/auth/admin-login', {
+    method: 'POST',
+    body: { email, password },
+  });
+}
+
+export async function getActiveSessions(token) {
+  return request('/api/admin/sessions/active', { token });
+}
+
+export async function forceEndSession(id, token) {
+  return request(
+    `/api/admin/sessions/${encodeURIComponent(id)}/force-end`,
+    { method: 'POST', token }
+  );
+}
+
+export async function getParkingAvailability() {
+  return request('/api/parking/availability');
 }
