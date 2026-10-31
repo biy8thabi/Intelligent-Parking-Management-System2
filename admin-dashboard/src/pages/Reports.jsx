@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
-import { getActiveSessions, getParkingAvailability } from "../services/api";
+import {
+  getActiveSessions,
+  getParkingAvailability,
+  request,
+} from "../services/api";
 
 
 function getVehicle(session) {
@@ -47,6 +50,70 @@ function localDate() {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
+function getStartMs(session) {
+  const raw = session.entry_time ?? session.start_time ?? session.created_at;
+  const ms = raw ? Date.parse(raw) : NaN;
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function formatDuration(ms) {
+  if (ms === null || ms < 0) return "—";
+  const totalMinutes = Math.floor(ms / 60000);
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+const money = (value) =>
+  new Intl.NumberFormat("en-ZA", { style: "currency", currency: "ZAR" }).format(
+    Number(value) || 0
+  );
+
+const RECEIVED = ["completed", "successful", "paid"];
+const FAILED = ["failed", "cancelled"];
+
+function paymentStatus(payment) {
+  return String(payment.status ?? payment.payment_status ?? "unknown").toLowerCase();
+}
+
+function paymentAmount(payment) {
+  const amount = Number(
+    payment.amount ?? payment.amount_paid ?? payment.total_amount ?? 0
+  );
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function paymentDate(payment) {
+  const raw = payment.paid_at ?? payment.payment_date ?? payment.created_at;
+  const date = raw ? new Date(raw) : null;
+  return date && !Number.isNaN(date.getTime()) ? date : null;
+}
+
+function dayKey(date) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+const RANGES = [
+  { value: "today", label: "Today", days: 1 },
+  { value: "7", label: "Last 7 days", days: 7 },
+  { value: "30", label: "Last 30 days", days: 30 },
+  { value: "all", label: "All time", days: null },
+];
+
+function readRefreshSeconds() {
+  try {
+    const prefs = JSON.parse(localStorage.getItem("pw_settings") || "{}");
+    const seconds = Number(prefs.refreshInterval);
+    return Number.isFinite(seconds) && seconds >= 10 ? seconds : 30;
+  } catch {
+    return 30;
+  }
+}
+
 function escapeCSV(value) {
   const text = String(value ?? "");
   // Protect spreadsheet programs against CSV formula injection.
@@ -81,6 +148,13 @@ export default function Reports({ token, onUnauthorised }) {
   const [reportType, setReportType] = useState("occupancy");
   const [search, setSearch] = useState("");
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [sortBy, setSortBy] = useState("longest");
+  const [now, setNow] = useState(() => Date.now());
+
+  const [payments, setPayments] = useState(null);
+  const [paymentsLoading, setPaymentsLoading] = useState(false);
+  const [paymentsError, setPaymentsError] = useState("");
+  const [range, setRange] = useState("30");
 
   const loadReports = useCallback(
     async (signal, isRefresh = false) => {
@@ -155,6 +229,68 @@ export default function Reports({ token, onUnauthorised }) {
     return () => controller.abort();
   }, [loadReports]);
 
+  const loadPayments = useCallback(async () => {
+    setPaymentsLoading(true);
+    setPaymentsError("");
+
+    try {
+      const result = await request("/api/admin/payments", { token });
+      const records = Array.isArray(result)
+        ? result
+        : result?.payments ?? result?.transactions ?? result?.data;
+
+      if (!Array.isArray(records)) {
+        throw new Error(
+          "The payments endpoint did not return a list of payments."
+        );
+      }
+
+      setPayments(records);
+    } catch (err) {
+      if (err.status === 401 || err.status === 403) {
+        onUnauthorised?.();
+      }
+      setPayments(null);
+      setPaymentsError(
+        err.status === 404
+          ? "The backend does not have a payments endpoint yet (/api/admin/payments), so revenue cannot be calculated."
+          : err.message || "Could not load payments."
+      );
+    } finally {
+      setPaymentsLoading(false);
+    }
+  }, [token, onUnauthorised]);
+
+  // Load payments the first time the Revenue tab is opened.
+  useEffect(() => {
+    if (
+      reportType === "revenue" &&
+      payments === null &&
+      !paymentsError &&
+      !paymentsLoading
+    ) {
+      loadPayments();
+    }
+  }, [reportType, payments, paymentsError, paymentsLoading, loadPayments]);
+
+  // Keep "time parked" current, and refresh live data on the interval from Settings.
+  useEffect(() => {
+    const tick = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(tick);
+  }, []);
+
+  useEffect(() => {
+    if (reportType === "revenue") return undefined;
+
+    const refresh = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        loadReports(undefined, true);
+      }
+    }, readRefreshSeconds() * 1000);
+
+    return () => clearInterval(refresh);
+  }, [reportType, loadReports]);
+
   const totalSpaces = Number(availability?.total_spaces ?? 0);
   const availableSpaces = Number(availability?.available_count ?? 0);
   const occupiedSpaces = Number(availability?.occupied_count ?? 0);
@@ -168,20 +304,108 @@ export default function Reports({ token, onUnauthorised }) {
   const filteredSessions = useMemo(() => {
     const term = search.trim().toLowerCase();
 
-    if (!term) return sessions;
+    const matches = term
+      ? sessions.filter((session) =>
+          [
+            session.id,
+            getVehicle(session),
+            getDriver(session),
+            getBay(session),
+            getStatus(session),
+          ].some((value) =>
+            String(value ?? "").toLowerCase().includes(term)
+          )
+        )
+      : sessions;
 
-    return sessions.filter((session) =>
-      [
-        session.id,
-        getVehicle(session),
-        getDriver(session),
-        getBay(session),
-        getStatus(session),
-      ].some((value) =>
-        String(value ?? "").toLowerCase().includes(term)
-      )
-    );
-  }, [sessions, search]);
+    // Oldest start first = longest parked first.
+    return [...matches].sort((x, y) => {
+      const xs = getStartMs(x);
+      const ys = getStartMs(y);
+      if (xs === null && ys === null) return 0;
+      if (xs === null) return 1;
+      if (ys === null) return -1;
+      return sortBy === "longest" ? xs - ys : ys - xs;
+    });
+  }, [sessions, search, sortBy]);
+
+  const sessionStats = useMemo(() => {
+    const durations = sessions
+      .map((session) => {
+        const start = getStartMs(session);
+        return start === null ? null : { session, ms: now - start };
+      })
+      .filter(Boolean);
+
+    if (durations.length === 0) {
+      return { average: null, longest: null };
+    }
+
+    const total = durations.reduce((sum, item) => sum + item.ms, 0);
+    const longest = durations.reduce((a, b) => (b.ms > a.ms ? b : a));
+
+    return {
+      average: total / durations.length,
+      longest,
+    };
+  }, [sessions, now]);
+
+  const revenue = useMemo(() => {
+    if (!payments) return null;
+
+    const rangeInfo = RANGES.find((item) => item.value === range);
+    let from = null;
+
+    if (rangeInfo?.days) {
+      from = new Date();
+      from.setHours(0, 0, 0, 0);
+      from.setDate(from.getDate() - (rangeInfo.days - 1));
+    }
+
+    let undated = 0;
+    const inRange = payments.filter((payment) => {
+      if (!from) return true;
+      const date = paymentDate(payment);
+      if (!date) {
+        undated += 1;
+        return false;
+      }
+      return date >= from;
+    });
+
+    const received = inRange.filter((p) => RECEIVED.includes(paymentStatus(p)));
+    const pending = inRange.filter((p) => paymentStatus(p) === "pending");
+    const failed = inRange.filter((p) => FAILED.includes(paymentStatus(p)));
+    const refunded = inRange.filter((p) => paymentStatus(p) === "refunded");
+
+    const sum = (list) => list.reduce((t, p) => t + paymentAmount(p), 0);
+    const total = sum(received);
+
+    const byDay = new Map();
+    received.forEach((payment) => {
+      const date = paymentDate(payment);
+      if (!date) return;
+      const key = dayKey(date);
+      const entry = byDay.get(key) ?? { day: key, count: 0, total: 0 };
+      entry.count += 1;
+      entry.total += paymentAmount(payment);
+      byDay.set(key, entry);
+    });
+
+    return {
+      total,
+      receivedCount: received.length,
+      average: received.length ? total / received.length : 0,
+      pendingCount: pending.length,
+      pendingTotal: sum(pending),
+      failedCount: failed.length,
+      refundedCount: refunded.length,
+      refundedTotal: sum(refunded),
+      days: [...byDay.values()].sort((x, y) => (x.day < y.day ? 1 : -1)),
+      undatedCount: received.filter((p) => !paymentDate(p)).length,
+      undatedSkipped: undated,
+    };
+  }, [payments, range]);
 
   const reportNames = {
     occupancy: "Parking Occupancy",
@@ -195,7 +419,7 @@ export default function Reports({ token, onUnauthorised }) {
       ? Boolean(availability)
       : reportType === "sessions"
         ? !sessionsError
-        : false);
+        : Boolean(revenue));
 
   function exportReport() {
     if (!canExport) return;
@@ -215,18 +439,39 @@ export default function Reports({ token, onUnauthorised }) {
         ["Disabled spaces", disabledSpaces],
         ["Occupancy rate (%)", occupancyRate.toFixed(1)],
       ];
+    } else if (reportType === "revenue") {
+      const label = RANGES.find((item) => item.value === range)?.label ?? range;
+      rows = [
+        ["ParkWise Revenue Report"],
+        ["Generated", generated],
+        ["Period", label],
+        ["Only payments with a completed/paid status are counted as revenue."],
+        [],
+        ["Metric", "Value"],
+        ["Revenue received (ZAR)", revenue.total.toFixed(2)],
+        ["Payments received", revenue.receivedCount],
+        ["Average payment (ZAR)", revenue.average.toFixed(2)],
+        ["Pending payments", revenue.pendingCount],
+        ["Pending amount (ZAR)", revenue.pendingTotal.toFixed(2)],
+        ["Failed or cancelled", revenue.failedCount],
+        ["Refunded (ZAR)", revenue.refundedTotal.toFixed(2)],
+        [],
+        ["Date", "Payments", "Revenue (ZAR)"],
+        ...revenue.days.map((d) => [d.day, d.count, d.total.toFixed(2)]),
+      ];
     } else {
       rows = [
         ["ParkWise Active Parking Sessions Report"],
         ["Generated", generated],
         [],
-        ["Session ID", "Vehicle", "Driver", "Bay", "Started", "Status"],
+        ["Session ID", "Vehicle", "Driver", "Bay", "Started", "Time parked", "Status"],
         ...filteredSessions.map((session) => [
           session.id ?? "",
           getVehicle(session),
           getDriver(session),
           getBay(session),
           getStarted(session),
+          getStartMs(session) === null ? "" : formatDuration(now - getStartMs(session)),
           getStatus(session),
         ]),
       ];
@@ -339,8 +584,11 @@ export default function Reports({ token, onUnauthorised }) {
         >
           <button
             type="button"
-            onClick={() => loadReports(undefined, true)}
-            disabled={loading || refreshing}
+            onClick={() => {
+              loadReports(undefined, true);
+              if (reportType === "revenue") loadPayments();
+            }}
+            disabled={loading || refreshing || paymentsLoading}
             style={{
               ...buttonStyle,
               background: "transparent",
@@ -519,9 +767,35 @@ export default function Reports({ token, onUnauthorised }) {
             <p role="alert">{sessionsError}</p>
           ) : (
             <>
-              <p>
-                {sessions.length} active sessions returned by the backend.
-              </p>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+                  gap: "16px",
+                  marginBottom: "8px",
+                }}
+              >
+                {[
+                  { label: "Active sessions", value: sessions.length },
+                  {
+                    label: "Average time parked",
+                    value: formatDuration(sessionStats.average),
+                  },
+                  {
+                    label: "Longest session",
+                    value: sessionStats.longest
+                      ? `${formatDuration(sessionStats.longest.ms)} · ${getVehicle(sessionStats.longest.session)}`
+                      : "—",
+                  },
+                ].map((item) => (
+                  <section key={item.label} className="panel" style={panelStyle}>
+                    <p style={{ opacity: 0.7, marginTop: 0 }}>{item.label}</p>
+                    <h2 style={{ fontSize: "22px", marginBottom: 0 }}>
+                      {item.value}
+                    </h2>
+                  </section>
+                ))}
+              </div>
 
               <input
                 className="report-search"
@@ -543,8 +817,26 @@ export default function Reports({ token, onUnauthorised }) {
                 }}
               />
 
+              <div
+                className="report-search"
+                style={{ display: "flex", gap: "12px", alignItems: "center", flexWrap: "wrap", marginBottom: "8px" }}
+              >
+                <label style={{ fontSize: "13px", opacity: 0.8 }}>
+                  Sort:{" "}
+                  <select
+                    value={sortBy}
+                    onChange={(event) => setSortBy(event.target.value)}
+                    style={{ padding: "6px", borderRadius: "6px", background: "transparent", color: "inherit", border: "1px solid #777" }}
+                  >
+                    <option value="longest">Longest parked first</option>
+                    <option value="newest">Newest first</option>
+                  </select>
+                </label>
+              </div>
+
               <p style={{ fontSize: "13px", opacity: 0.7 }}>
                 Showing {filteredSessions.length} of {sessions.length} sessions.
+                Time parked updates automatically.
               </p>
 
               <div style={{ overflowX: "auto" }}>
@@ -557,7 +849,7 @@ export default function Reports({ token, onUnauthorised }) {
                 >
                   <thead>
                     <tr>
-                      {["Session ID", "Vehicle", "Driver", "Bay", "Started", "Status"].map(
+                      {["Session ID", "Vehicle", "Driver", "Bay", "Started", "Time parked", "Status"].map(
                         (heading) => (
                           <th
                             key={heading}
@@ -591,6 +883,11 @@ export default function Reports({ token, onUnauthorised }) {
                           {getStarted(session)}
                         </td>
                         <td style={{ padding: "12px" }}>
+                          {formatDuration(
+                            getStartMs(session) === null ? null : now - getStartMs(session)
+                          )}
+                        </td>
+                        <td style={{ padding: "12px" }}>
                           {getStatus(session)}
                         </td>
                       </tr>
@@ -598,7 +895,7 @@ export default function Reports({ token, onUnauthorised }) {
 
                     {filteredSessions.length === 0 && (
                       <tr>
-                        <td colSpan={6} style={{ padding: "18px" }}>
+                        <td colSpan={7} style={{ padding: "18px" }}>
                           No matching active sessions.
                         </td>
                       </tr>
@@ -611,30 +908,130 @@ export default function Reports({ token, onUnauthorised }) {
         </section>
       )}
 
-      {!loading && reportType === "revenue" && (
-        <section className="panel" style={panelStyle}>
-          <h3>Revenue data not connected</h3>
+      {reportType === "revenue" && (
+        <>
+          {paymentsLoading && <p>Loading payments...</p>}
 
-          <p>
-            A reliable revenue report requires verified payment records
-            or an approved backend revenue endpoint.
-          </p>
+          {!paymentsLoading && paymentsError && (
+            <section className="panel" style={panelStyle}>
+              <h3>Revenue unavailable</h3>
+              <p role="alert">{paymentsError}</p>
+              <p style={{ opacity: 0.75 }}>
+                No revenue figures are shown or exported until real payment
+                records can be loaded.
+              </p>
+              <button
+                type="button"
+                onClick={loadPayments}
+                style={{ ...buttonStyle, background: "transparent", color: "inherit" }}
+              >
+                Try again
+              </button>
+            </section>
+          )}
 
-          <p>
-            Calculated parking fees do not necessarily mean payments
-            have been received.
-          </p>
+          {!paymentsLoading && revenue && (
+            <>
+              <div
+                className="report-tabs"
+                style={{ display: "flex", flexWrap: "wrap", gap: "10px", marginBottom: "20px" }}
+              >
+                {RANGES.map((item) => (
+                  <button
+                    key={item.value}
+                    type="button"
+                    aria-pressed={range === item.value}
+                    onClick={() => setRange(item.value)}
+                    style={{
+                      ...buttonStyle,
+                      padding: "8px 14px",
+                      background: range === item.value ? "#7c3aed" : "transparent",
+                      color: range === item.value ? "#fff" : "inherit",
+                    }}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
 
-          <p>
-            No revenue totals will be displayed or exported until
-            confirmed financial data is available.
-          </p>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+                  gap: "16px",
+                  marginBottom: "24px",
+                }}
+              >
+                {[
+                  { label: "Revenue received", value: money(revenue.total) },
+                  { label: "Payments received", value: revenue.receivedCount },
+                  { label: "Average payment", value: money(revenue.average) },
+                  {
+                    label: "Pending",
+                    value: `${revenue.pendingCount} · ${money(revenue.pendingTotal)}`,
+                  },
+                  { label: "Failed / cancelled", value: revenue.failedCount },
+                  {
+                    label: "Refunded",
+                    value: `${revenue.refundedCount} · ${money(revenue.refundedTotal)}`,
+                  },
+                ].map((item) => (
+                  <section key={item.label} className="panel" style={panelStyle}>
+                    <p style={{ opacity: 0.7, marginTop: 0 }}>{item.label}</p>
+                    <h2 style={{ fontSize: "24px", marginBottom: 0 }}>{item.value}</h2>
+                  </section>
+                ))}
+              </div>
 
-          <p>
-            Individual payment records, if the backend provides them, are
-            on the <Link to="/payments">Payments page</Link>.
-          </p>
-        </section>
+              <section className="panel" style={panelStyle}>
+                <h3>Revenue by day</h3>
+
+                <div style={{ overflowX: "auto" }}>
+                  <table className="report-table" style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr>
+                        {["Date", "Payments", "Revenue"].map((heading) => (
+                          <th
+                            key={heading}
+                            style={{ textAlign: "left", padding: "12px", borderBottom: "1px solid #777" }}
+                          >
+                            {heading}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {revenue.days.map((day) => (
+                        <tr key={day.day}>
+                          <td style={{ padding: "12px" }}>{day.day}</td>
+                          <td style={{ padding: "12px" }}>{day.count}</td>
+                          <td style={{ padding: "12px" }}>{money(day.total)}</td>
+                        </tr>
+                      ))}
+                      {revenue.days.length === 0 && (
+                        <tr>
+                          <td colSpan={3} style={{ padding: "18px" }}>
+                            No received payments in this period.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <p style={{ fontSize: "13px", opacity: 0.7, marginBottom: 0 }}>
+                  Only payments marked completed, successful or paid count as
+                  revenue. Pending, failed and refunded payments are shown
+                  separately.
+                  {revenue.undatedSkipped > 0 &&
+                    ` ${revenue.undatedSkipped} payment(s) with no date were left out of this period.`}
+                  {revenue.undatedCount > 0 &&
+                    ` ${revenue.undatedCount} received payment(s) have no date and are not in the daily table.`}
+                </p>
+              </section>
+            </>
+          )}
+        </>
       )}
     </div>
   );
