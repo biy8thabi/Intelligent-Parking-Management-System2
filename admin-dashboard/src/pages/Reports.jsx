@@ -1,11 +1,11 @@
-
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getParkingAvailability } from "../services/api";
+import { Link } from "react-router-dom";
+import { getActiveSessions, getParkingAvailability } from "../services/api";
 
-const API_URL = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 
 function getVehicle(session) {
   return (
+    session.vehicle_registration_number ??
     session.vehicle_registration ??
     session.registration_number ??
     session.vehicle_plate ??
@@ -16,10 +16,35 @@ function getVehicle(session) {
 function getDriver(session) {
   return (
     session.driver_name ??
+    session.users?.full_name ??
     session.user?.full_name ??
     session.driver?.full_name ??
     "Not supplied"
   );
+}
+
+function getBay(session) {
+  const bay = session.parking_spaces;
+  if (!bay) return "—";
+  return [bay.zone, bay.bay_number].filter(Boolean).join("-") || "—";
+}
+
+function getStarted(session) {
+  const raw = session.entry_time ?? session.start_time ?? session.created_at;
+  if (!raw) return "—";
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("en-ZA");
+}
+
+function getStatus(session) {
+  return session.session_status ?? session.status ?? "Active";
+}
+
+// Local calendar date (toISOString would use UTC and be a day off after midnight in SAST).
+function localDate() {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
 function escapeCSV(value) {
@@ -70,39 +95,17 @@ export default function Reports({ token, onUnauthorised }) {
 
       const availabilityRequest = getParkingAvailability();
 
-      const sessionsRequest = API_URL
-        ? fetch(`${API_URL}/api/admin/sessions/active`, {
-            signal,
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          }).then(async (response) => {
-            if (response.status === 401 || response.status === 403) {
-              const error = new Error("Your admin session is not authorised.");
-              error.unauthorised = true;
-              throw error;
-            }
+      const sessionsRequest = getActiveSessions(token).then((data) => {
+        const records = Array.isArray(data)
+          ? data
+          : data?.active_sessions ?? data?.sessions ?? data?.data ?? [];
 
-            if (!response.ok) {
-              throw new Error(
-                `Could not load sessions (HTTP ${response.status}).`
-              );
-            }
+        if (!Array.isArray(records)) {
+          throw new Error("Unexpected sessions response from backend.");
+        }
 
-            const data = await response.json();
-            const records = Array.isArray(data)
-              ? data
-              : data.sessions ?? data.data ?? [];
-
-            if (!Array.isArray(records)) {
-              throw new Error("Unexpected sessions response from backend.");
-            }
-
-            return records;
-          })
-        : Promise.reject(
-            new Error("The backend API URL is not configured.")
-          );
+        return records;
+      });
 
       const [availabilityResult, sessionsResult] =
         await Promise.allSettled([
@@ -126,7 +129,10 @@ export default function Reports({ token, onUnauthorised }) {
         setSessions(sessionsResult.value);
       } else {
         setSessions([]);
-        if (sessionsResult.reason?.unauthorised) {
+        if (
+          sessionsResult.reason?.status === 401 ||
+          sessionsResult.reason?.status === 403
+        ) {
           onUnauthorised?.();
         }
         setSessionsError(
@@ -169,7 +175,8 @@ export default function Reports({ token, onUnauthorised }) {
         session.id,
         getVehicle(session),
         getDriver(session),
-        session.status,
+        getBay(session),
+        getStatus(session),
       ].some((value) =>
         String(value ?? "").toLowerCase().includes(term)
       )
@@ -213,18 +220,20 @@ export default function Reports({ token, onUnauthorised }) {
         ["ParkWise Active Parking Sessions Report"],
         ["Generated", generated],
         [],
-        ["Session ID", "Vehicle", "Driver", "Status"],
+        ["Session ID", "Vehicle", "Driver", "Bay", "Started", "Status"],
         ...filteredSessions.map((session) => [
           session.id ?? "",
           getVehicle(session),
           getDriver(session),
-          session.status ?? "Active",
+          getBay(session),
+          getStarted(session),
+          getStatus(session),
         ]),
       ];
     }
 
     downloadCSV(
-      `parkwise-${reportType}-${new Date().toISOString().slice(0, 10)}.csv`,
+      `parkwise-${reportType}-${localDate()}.csv`,
       rows
     );
   }
@@ -256,10 +265,21 @@ export default function Reports({ token, onUnauthorised }) {
             color: black !important;
           }
 
+          .side,
+          .topbar,
           .report-actions,
           .report-tabs,
           .report-search {
             display: none !important;
+          }
+
+          .shell {
+            display: block !important;
+          }
+
+          .main-area {
+            margin: 0 !important;
+            padding: 0 !important;
           }
 
           .page {
@@ -378,6 +398,7 @@ export default function Reports({ token, onUnauthorised }) {
             key={item.value}
             type="button"
             onClick={() => setReportType(item.value)}
+            aria-pressed={reportType === item.value}
             style={{
               ...buttonStyle,
               background:
@@ -451,17 +472,24 @@ export default function Reports({ token, onUnauthorised }) {
                     background: "rgba(127,127,127,0.2)",
                     borderRadius: "20px",
                     overflow: "hidden",
+                    display: "flex",
                     margin: "20px 0 12px",
                   }}
                 >
-                  <div
-                    style={{
-                      width: `${occupancyRate}%`,
-                      height: "100%",
-                      background: "#8b5cf6",
-                      borderRadius: "20px",
-                    }}
-                  />
+                  {[
+                    { n: occupiedSpaces, color: "#8b5cf6" },
+                    { n: availableSpaces, color: "#34d399" },
+                    { n: disabledSpaces, color: "#fbbf24" },
+                  ].map((part, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        width: `${totalSpaces > 0 ? Math.min(100, (part.n / totalSpaces) * 100) : 0}%`,
+                        height: "100%",
+                        background: part.color,
+                      }}
+                    />
+                  ))}
                 </div>
 
                 <p>
@@ -470,8 +498,14 @@ export default function Reports({ token, onUnauthorised }) {
                 </p>
 
                 <p>
-                  Available: {availableSpaces} | Occupied: {occupiedSpaces}
-                  {" | "}Disabled: {disabledSpaces}
+                  <span style={{ color: "#8b5cf6" }}>●</span> Occupied:{" "}
+                  {occupiedSpaces}
+                  {"  "}
+                  <span style={{ color: "#34d399" }}>●</span> Available:{" "}
+                  {availableSpaces}
+                  {"  "}
+                  <span style={{ color: "#fbbf24" }}>●</span> Disabled:{" "}
+                  {disabledSpaces}
                 </p>
               </section>
             </>
@@ -523,7 +557,7 @@ export default function Reports({ token, onUnauthorised }) {
                 >
                   <thead>
                     <tr>
-                      {["Session ID", "Vehicle", "Driver", "Status"].map(
+                      {["Session ID", "Vehicle", "Driver", "Bay", "Started", "Status"].map(
                         (heading) => (
                           <th
                             key={heading}
@@ -552,15 +586,19 @@ export default function Reports({ token, onUnauthorised }) {
                         <td style={{ padding: "12px" }}>
                           {getDriver(session)}
                         </td>
+                        <td style={{ padding: "12px" }}>{getBay(session)}</td>
                         <td style={{ padding: "12px" }}>
-                          {session.status ?? "Active"}
+                          {getStarted(session)}
+                        </td>
+                        <td style={{ padding: "12px" }}>
+                          {getStatus(session)}
                         </td>
                       </tr>
                     ))}
 
                     {filteredSessions.length === 0 && (
                       <tr>
-                        <td colSpan={4} style={{ padding: "18px" }}>
+                        <td colSpan={6} style={{ padding: "18px" }}>
                           No matching active sessions.
                         </td>
                       </tr>
@@ -590,6 +628,11 @@ export default function Reports({ token, onUnauthorised }) {
           <p>
             No revenue totals will be displayed or exported until
             confirmed financial data is available.
+          </p>
+
+          <p>
+            Individual payment records, if the backend provides them, are
+            on the <Link to="/payments">Payments page</Link>.
           </p>
         </section>
       )}
