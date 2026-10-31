@@ -1,30 +1,32 @@
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from "react";
 import {
   BrowserRouter,
   Navigate,
+  Outlet,
   Route,
   Routes,
   useLocation,
-} from 'react-router-dom';
+} from "react-router-dom";
 
-import Layout from './components/Layout';
-import Login from './pages/Login';
-import Dashboard from './pages/Dashboard';
-import Sessions from './pages/Sessions';
-import CrudPage from './pages/CrudPage';
-import FeeCalculator from './pages/FeeCalculator';
-import Reports from './pages/Reports';
-import Settings from './pages/Settings';
-import { request } from './services/api';
+import Layout from "./components/Layout";
+import Login from "./pages/Login";
+import Dashboard from "./pages/Dashboard";
+import Sessions from "./pages/Sessions";
+import CrudPage from "./pages/CrudPage";
+import Vehicles from "./pages/Vehicles";
+import FeeCalculator from "./pages/FeeCalculator";
+import Reports from "./pages/Reports";
+import Settings from "./pages/Settings";
+import { request } from "./services/api";
 
-const TOKEN_KEY = 'pw_admin_token';
+const TOKEN_KEY = "pw_admin_token";
 
 function ProtectedLayout({ onLogout }) {
   const location = useLocation();
   const [checking, setChecking] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
 
   const verifySession = useCallback(async () => {
     const token = sessionStorage.getItem(TOKEN_KEY);
@@ -36,15 +38,15 @@ function ProtectedLayout({ onLogout }) {
     }
 
     setChecking(true);
-    setError('');
+    setError("");
 
     try {
-      await request('/api/auth/me', { token });
+      await request("/api/auth/me", { token });
       setAuthenticated(true);
     } catch (err) {
       sessionStorage.removeItem(TOKEN_KEY);
       setAuthenticated(false);
-      setError(err.message || 'Please sign in again.');
+      setError(err.message || "Please sign in again.");
     } finally {
       setChecking(false);
     }
@@ -57,7 +59,7 @@ function ProtectedLayout({ onLogout }) {
   if (checking) {
     return (
       <main className="page">
-        <p role="status">Checking administrator session…</p>
+        <p role="status">Checking administrator session...</p>
       </main>
     );
   }
@@ -72,7 +74,11 @@ function ProtectedLayout({ onLogout }) {
     );
   }
 
-  return <Layout onLogout={onLogout} />;
+  return (
+    <Layout onLogout={onLogout}>
+      <Outlet />
+    </Layout>
+  );
 }
 
 function AppRoutes() {
@@ -80,24 +86,18 @@ function AppRoutes() {
 
   const logout = useCallback(() => {
     sessionStorage.removeItem(TOKEN_KEY);
-    setLoginVersion(version => version + 1);
-    window.location.replace('/login');
+    setLoginVersion((version) => version + 1);
+    window.location.replace("/login");
   }, []);
 
   return (
     <Routes>
       <Route
         path="/login"
-        element={
-          <Login
-            key={loginVersion}
-          />
-        }
+        element={<Login key={loginVersion} />}
       />
 
-      <Route
-        element={<ProtectedLayout onLogout={logout} />}
-      >
+      <Route element={<ProtectedLayout onLogout={logout} />}>
         <Route index element={<Dashboard />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/sessions" element={<Sessions />} />
@@ -118,10 +118,7 @@ function AppRoutes() {
           path="/drivers"
           element={<CrudPage title="Drivers" />}
         />
-        <Route
-          path="/vehicles"
-          element={<CrudPage title="Vehicles" />}
-        />
+        <Route path="/vehicles" element={<Vehicles />} />
         <Route
           path="/payments"
           element={<CrudPage title="Payments" />}
