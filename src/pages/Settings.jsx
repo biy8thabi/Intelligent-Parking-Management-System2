@@ -1,0 +1,38 @@
+import {useEffect,useState} from "react";
+import {FiSun,FiMoon,FiBell,FiTruck,FiShield,FiUser,FiCheck,FiSave,FiMonitor,FiLock,FiMail,FiRefreshCw} from "react-icons/fi";
+const defaults={systemNotifications:true,emailNotifications:false,sounds:false,currency:"ZAR",refreshInterval:"30",adminName:"Administrator",adminEmail:"admin@parkwise.com"};
+function readPrefs(){try{return {...defaults,...JSON.parse(localStorage.getItem("pw_settings")||"{}")}}catch{return defaults}}
+export default function Settings({theme,onThemeChange}){
+ const [prefs,setPrefs]=useState(readPrefs),[saved,setSaved]=useState(false),[password,setPassword]=useState({current:"",next:"",confirm:""}),[passwordMessage,setPasswordMessage]=useState("");
+ useEffect(()=>{localStorage.setItem("pw_settings",JSON.stringify(prefs))},[prefs]);
+ const update=(key,value)=>{setPrefs(p=>({...p,[key]:value}));setSaved(false)};
+ function save(){localStorage.setItem("pw_settings",JSON.stringify(prefs));setSaved(true);setTimeout(()=>setSaved(false),2500)}
+ function changePassword(e){e.preventDefault();if(!password.current||!password.next||!password.confirm){setPasswordMessage("Complete all password fields.");return}if(password.next.length<8){setPasswordMessage("Use at least 8 characters for the new password.");return}if(password.next!==password.confirm){setPasswordMessage("The new passwords do not match.");return}setPasswordMessage("Password form validated. Connect backend authentication to securely update the account password.");setPassword({current:"",next:"",confirm:""})}
+ return <div className="page settings-page"><div className="settings-hero"><div><div className="eyebrow">PARKWISE CONTROL CENTRE</div><h1>Settings</h1><p>Personalise your workspace and manage system preferences.</p></div><div className="settings-hero-icon"><FiSettingsIcon/></div></div>
+ <div className="settings-layout"><aside className="settings-nav"><div className="settings-nav-title">PREFERENCES</div><a href="#appearance" className="selected"><FiMonitor/> Appearance</a><a href="#notifications"><FiBell/> Notifications</a><a href="#parking"><FiTruck/> Parking preferences</a><a href="#account"><FiUser/> Account & security</a><div className="settings-tip"><FiShield/><b>Your workspace</b><span>Settings are saved in this browser. Shared system changes require backend integration.</span></div></aside>
+ <div className="settings-content">
+ <section className="settings-card" id="appearance"><div className="section-heading"><div className="section-icon"><FiMonitor/></div><div><h2>Appearance</h2><p>Choose the look that works best for you.</p></div></div>
+ <div className="theme-options">
+ {["light","dark"].map(t=><button type="button" key={t} onClick={()=>onThemeChange(t)} className={"theme-choice "+(theme===t?"chosen":"")}><div className={"theme-preview "+t}><div className="preview-sidebar"/><div className="preview-content"><i/><i/><div><b/><b/><b/></div></div></div><span><b>{t==="light"?"Light mode":"Dark mode"}</b><small>{t==="light"?"Bright, clean and airy":"Easy on the eyes in low light"}</small></span><span className="theme-check">{theme===t?<FiCheck/>:null}</span></button>)}
+ </div><div className="setting-inline"><div><b>Theme preference</b><small>Your selection is remembered when you return.</small></div><span className="pill-status"><span/> {theme==="dark"?"Dark active":"Light active"}</span></div>
+ </section>
+ <section className="settings-card" id="notifications"><div className="section-heading"><div className="section-icon"><FiBell/></div><div><h2>Notifications</h2><p>Choose which alerts you want to receive.</p></div></div>
+ <SettingToggle title="System notifications" description="Booking, parking-space and payment alerts inside the admin portal." checked={prefs.systemNotifications} onChange={v=>update("systemNotifications",v)}/>
+ <SettingToggle title="Email notifications" description="Email alerts when a new booking or payment is recorded. Requires backend email configuration." checked={prefs.emailNotifications} onChange={v=>update("emailNotifications",v)}/>
+ <SettingToggle title="Notification sounds" description="Play a sound when a new system alert arrives." checked={prefs.sounds} onChange={v=>update("sounds",v)}/>
+ </section>
+ <section className="settings-card" id="parking"><div className="section-heading"><div className="section-icon"><FiTruck/></div><div><h2>Parking preferences</h2><p>Set the defaults used in your admin workspace.</p></div></div>
+ <div className="form-grid"><label>Display currency <small>Used for amounts displayed in the interface.</small><select value={prefs.currency} onChange={e=>update("currency",e.target.value)}><option value="ZAR">ZAR — South African Rand (R)</option><option value="USD">USD — US Dollar ($)</option><option value="EUR">EUR — Euro (€)</option><option value="GBP">GBP — British Pound (£)</option></select></label>
+ <label>Session refresh interval <small>How often session data should refresh once live API polling is connected.</small><select value={prefs.refreshInterval} onChange={e=>update("refreshInterval",e.target.value)}><option value="15">Every 15 seconds</option><option value="30">Every 30 seconds</option><option value="60">Every 60 seconds</option><option value="120">Every 2 minutes</option></select></label></div>
+ <div className="setting-note"><FiRefreshCw/><span>These are saved preferences. Live parking/session refresh and currency conversion need to be wired into the backend-driven pages.</span></div>
+ </section>
+ <section className="settings-card" id="account"><div className="section-heading"><div className="section-icon"><FiShield/></div><div><h2>Account & security</h2><p>Manage the details shown for your administrator account.</p></div></div>
+ <div className="form-grid"><label>Administrator name<input value={prefs.adminName} onChange={e=>update("adminName",e.target.value)} placeholder="Your display name"/></label><label>Email address<input type="email" value={prefs.adminEmail} onChange={e=>update("adminEmail",e.target.value)} placeholder="admin@example.com"/></label></div>
+ <div className="setting-note"><FiLock/><span>Profile edits are currently stored in this browser only. Connect the admin profile endpoint to update the shared account.</span></div>
+ <form className="password-form" onSubmit={changePassword}><h3><FiLock/> Change password</h3><div className="form-grid"><label>Current password<input type="password" value={password.current} onChange={e=>setPassword({...password,current:e.target.value})} autoComplete="current-password"/></label><label>New password<input type="password" value={password.next} onChange={e=>setPassword({...password,next:e.target.value})} autoComplete="new-password"/></label><label>Confirm new password<input type="password" value={password.confirm} onChange={e=>setPassword({...password,confirm:e.target.value})} autoComplete="new-password"/></label></div>{passwordMessage&&<p className="form-message">{passwordMessage}</p>}<button className="secondary-button" type="submit">Validate password change</button></form>
+ </section>
+ <div className="settings-footer"><span>{saved?<><FiCheck/> Preferences saved</>:"Your preferences are saved locally in this browser."}</span><button className="primary save-button" onClick={save}><FiSave/>{saved?"Saved":"Save preferences"}</button></div>
+ </div></div></div>
+}
+function SettingToggle({title,description,checked,onChange}){return <div className="toggle-row"><div><b>{title}</b><small>{description}</small></div><button type="button" role="switch" aria-checked={checked} onClick={()=>onChange(!checked)} className={"switch "+(checked?"on":"")}><span/></button></div>}
+function FiSettingsIcon(){return <FiMonitor/>}
