@@ -54,7 +54,7 @@ async function createSession(req, res) {
 
     const { data: space, error: spaceError } = await supabase
       .from('parking_spaces')
-      .select('id, status')
+      .select('id, status, zone, bay_number, floor, gate')
       .eq('id', parking_space_id)
       .maybeSingle();
 
@@ -89,7 +89,7 @@ async function createSession(req, res) {
     try {
       await createNotification(
         user_id,
-        `Your parking session has started at bay ${parking_space_id}.`,
+        buildBayLabel(space),
         'session_started'
       );
     } catch (notifyErr) {
@@ -101,6 +101,22 @@ async function createSession(req, res) {
     console.error('createSession error:', err.message);
     res.status(500).json({ error: 'Could not start parking session' });
   }
+}
+
+// ------------------------------------------------------------
+// Shared wording for a bay, e.g. "bay A1 on GF".
+// Used by the start notification and the history rows so both
+// read the same way.
+// ------------------------------------------------------------
+function buildBayLabel(space) {
+  if (!space) return 'an unknown bay';
+
+  const zone = space.zone ? String(space.zone).trim() : '';
+  const bay = space.bay_number != null ? String(space.bay_number).trim() : '';
+  const code = `${zone}${bay}`.trim() || 'an unknown bay';
+
+  const floor = space.floor != null ? String(space.floor).trim() : '';
+  return floor ? `bay ${code} on ${floor}` : `bay ${code}`;
 }
 
 // ------------------------------------------------------------
@@ -129,7 +145,13 @@ async function getActiveSessionForUser(req, res) {
 
 // ------------------------------------------------------------
 // GET /api/parking/history/:user_id
+// Full history: every session this driver has ever had, including
+// the one currently running and any cancelled ones. No status
+// filter - filtering here is what hid older and live sessions.
+// Sorted by entry_time because active rows have no exit_time.
 // ------------------------------------------------------------
+const RATE_PER_HOUR = 10;
+
 async function getSessionHistory(req, res) {
   try {
     const { user_id } = req.params;
@@ -138,12 +160,42 @@ async function getSessionHistory(req, res) {
       .from('parking_sessions')
       .select('*, parking_spaces:parking_space_id ( zone, bay_number, floor, gate, is_accessible )')
       .eq('user_id', user_id)
-      .eq('session_status', 'completed')
-      .order('exit_time', { ascending: false });
+      .order('entry_time', { ascending: false });
 
     if (error) throw error;
 
-    res.json({ history: sessions });
+    const now = Date.now();
+
+    const history = (sessions || []).map((s) => {
+      const isActive = s.session_status === 'active';
+
+      let minutes_running = null;
+      let running_fee = null;
+
+      if (isActive && s.entry_time) {
+        minutes_running = Math.max(1, Math.round((now - new Date(s.entry_time).getTime()) / 60000));
+        running_fee = Math.round((minutes_running / 60) * RATE_PER_HOUR * 100) / 100;
+      }
+
+      let display_label;
+      if (isActive) {
+        display_label = `Running • ${buildBayLabel(s.parking_spaces)} • ${minutes_running} min • R${running_fee.toFixed(2)} so far`;
+      } else if (s.session_status === 'cancelled') {
+        display_label = `Cancelled • ${buildBayLabel(s.parking_spaces)} • No fee`;
+      } else {
+        display_label = `Completed • ${buildBayLabel(s.parking_spaces)} • R${Number(s.fee_amount ?? 0).toFixed(2)}`;
+      }
+
+      return {
+        ...s,
+        bay_label: buildBayLabel(s.parking_spaces),
+        minutes_running,
+        running_fee,
+        display_label,
+      };
+    });
+
+    res.json({ history });
   } catch (err) {
     console.error('getSessionHistory error:', err.message);
     res.status(500).json({ error: 'Could not fetch parking history' });
@@ -194,7 +246,6 @@ async function endSessionCore(
   const entryTime = new Date(session.entry_time);
   const minutesParked = Math.max(1, Math.round((exitTime - entryTime) / 60000));
 
-  const RATE_PER_HOUR = 10;
   const feeAmount = Math.round((minutesParked / 60) * RATE_PER_HOUR * 100) / 100;
 
   const { data: updatedSession, error: updateError } = await supabase
@@ -220,7 +271,7 @@ async function endSessionCore(
   try {
     await createNotification(
       session.user_id,
-      `${notifyMessagePrefix} Fee: R${feeAmount}.`,
+      `${notifyMessagePrefix} Fee: R${feeAmount.toFixed(2)}.`,
       'session_ended'
     );
   } catch (notifyErr) {
@@ -344,4 +395,5 @@ module.exports = {
   cancelSession,
   getActiveSessionForUser,
   getSessionHistory,
+  buildBayLabel,
 };
