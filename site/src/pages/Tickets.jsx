@@ -32,8 +32,8 @@ export default function Tickets({ token, onUnauthorised }) {
   const stillActive = tickets.filter((t) => t.parking_sessions?.session_status === "active").length;
 
   function exportCSV() {
-    downloadCSV(`parkwise-tickets-${localDate()}.csv`, [
-      ["ParkWise Tickets"],
+    downloadCSV(`ipms-tickets-${localDate()}.csv`, [
+      ["Intelligent Parking Management System - Tickets"],
       ["Generated", new Date().toLocaleString("en-ZA")],
       [],
       ["Ticket code", "Vehicle", "Bay", "Issued", "Session status"],
