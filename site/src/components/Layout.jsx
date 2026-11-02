@@ -1,158 +1,144 @@
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
-
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import {
   FiGrid,
+  FiClock,
   FiMap,
   FiUsers,
-  FiCalendar,
+  FiBarChart2,
+  FiDollarSign,
+  FiFileText,
+  FiLayers,
+  FiKey,
+  FiTag,
+  FiTruck,
   FiSettings,
   FiUser,
   FiLogOut,
   FiSun,
   FiMoon,
-  FiSearch,
-  FiDollarSign,
-  FiBarChart2,
 } from "react-icons/fi";
 
-const items = [
-  ["Dashboard", "/", FiGrid],
-  ["Active Sessions", "/sessions", FiCalendar],
-  ["Available Bays", "/available-bays", FiMap],
-  ["Drivers", "/drivers", FiUsers],
-  ["Reports", "/reports", FiBarChart2],
-  ["Fee Calculator", "/fee-calculator", FiDollarSign],
-  ["Settings", "/settings", FiSettings],
-  ["Admin Profile", "/admin-profile", FiUser],
+// The sidebar menu, grouped so related pages sit together.
+const groups = [
+  {
+    label: "OVERVIEW",
+    items: [["Dashboard", "/", FiGrid]],
+  },
+  {
+    label: "OPERATIONS",
+    items: [
+      ["Active Sessions", "/sessions", FiClock],
+      ["Session History", "/history", FiFileText],
+      ["Available Bays", "/available-bays", FiMap],
+      ["Parking Spaces", "/parking-spaces", FiLayers],
+      ["Tickets", "/tickets", FiTag],
+    ],
+  },
+  {
+    label: "PEOPLE AND VEHICLES",
+    items: [
+      ["Drivers", "/drivers", FiUsers],
+      ["Vehicles", "/vehicles", FiTruck],
+      ["Password Requests", "/password-requests", FiKey],
+    ],
+  },
+  {
+    label: "INSIGHTS",
+    items: [
+      ["Reports", "/reports", FiBarChart2],
+      ["Fee Calculator", "/fee-calculator", FiDollarSign],
+    ],
+  },
+  {
+    label: "ACCOUNT",
+    items: [
+      ["Settings", "/settings", FiSettings],
+      ["Admin Profile", "/admin-profile", FiUser],
+    ],
+  },
 ];
 
-export default function Layout({
-  onLogout,
-  theme,
-  onThemeChange,
-  admin,
-}) {
-  const navigate = useNavigate();
+const allItems = groups.flatMap((g) => g.items);
 
+export default function Layout({ onLogout, theme, onThemeChange, admin }) {
+  const { pathname } = useLocation();
+
+  // The page name shown in the top bar.
+  const current = allItems.find(([, path]) => path === pathname);
+  const pageName = current ? current[0] : "ParkWise Admin";
+
+  const name = admin?.full_name || "Administrator";
   const initials =
-    (admin?.full_name || "Administrator")
+    name
       .split(/\s+/)
       .filter(Boolean)
       .slice(0, 2)
       .map((word) => word[0].toUpperCase())
       .join("") || "AD";
 
-  // Type a page name (e.g. "reports") and press Enter to jump to it.
-  function jumpToPage(event) {
-    if (event.key !== "Enter") return;
-
-    const term = event.currentTarget.value.trim().toLowerCase();
-    if (!term) return;
-
-    const match = items.find(([name]) => name.toLowerCase().includes(term));
-
-    if (match) {
-      navigate(match[1]);
-      event.currentTarget.value = "";
-    }
-  }
-
   return (
     <div className="shell">
-      <aside className="side">
+      <aside className="sidebar">
         <div className="brand">
           <span className="brand-mark">P</span>
-
           <span>
             <b>ParkWise</b>
             <small>ADMIN PORTAL</small>
           </span>
         </div>
 
-        <div className="nav-label">WORKSPACE</div>
-
-        <nav>
-          {items.map(([name, path, Icon]) => (
-            <NavLink
-              key={name}
-              to={path}
-              end={name === "Dashboard"}
-            >
-              <Icon />
-              <span>{name}</span>
-
-            </NavLink>
+        <nav className="nav" aria-label="Main menu">
+          {groups.map((group) => (
+            <div className="nav-group" key={group.label}>
+              <span className="nav-label">{group.label}</span>
+              {group.items.map(([label, path, Icon]) => (
+                <NavLink
+                  key={path}
+                  to={path}
+                  end={path === "/"}
+                  className={({ isActive }) => (isActive ? "active" : "")}
+                >
+                  <Icon aria-hidden="true" />
+                  <span>{label}</span>
+                </NavLink>
+              ))}
+            </div>
           ))}
         </nav>
 
-        <div className="side-bottom">
-          <div className="side-promo">
-            <div className="promo-orb">✦</div>
-
-            <b>
-              Smart parking.
-              <br />
-              Better tomorrow.
-            </b>
-
-            <small>
-              Manage your facility with confidence.
-            </small>
-          </div>
-
-          <button
-            className="logout"
-            type="button"
-            onClick={onLogout}
-          >
-            <FiLogOut />
-            Sign out
-          </button>
-        </div>
+        <button className="signout" type="button" onClick={onLogout}>
+          <FiLogOut aria-hidden="true" />
+          Sign out
+        </button>
       </aside>
 
-      <main className="main-area">
+      <div className="main">
         <header className="topbar">
-          <div className="top-search">
-            <FiSearch />
+          <strong>{pageName}</strong>
 
-            <input
-              placeholder="Jump to a page (e.g. Reports)..."
-              aria-label="Jump to a page"
-              onKeyDown={jumpToPage}
-            />
-          </div>
-
-          <div className="top-actions">
+          <div className="top-right">
             <button
-              className="icon-button"
+              className="icon-btn"
               type="button"
-              title="Toggle theme"
-              aria-label="Toggle theme"
-              onClick={() =>
-                onThemeChange(
-                  theme === "dark" ? "light" : "dark"
-                )
-              }
+              title="Switch light or dark theme"
+              aria-label="Switch light or dark theme"
+              onClick={() => onThemeChange(theme === "dark" ? "light" : "dark")}
             >
               {theme === "dark" ? <FiSun /> : <FiMoon />}
             </button>
-            <div className="user-chip">
+
+            <div className="user">
               <div className="avatar">{initials}</div>
-
-              <span>
-                <b>
-                  {admin?.full_name || "Administrator"}
-                </b>
-
-                <small>Administrator</small>
-              </span>
+              <div>
+                <div className="user-name">{name}</div>
+                <div className="user-role">Administrator</div>
+              </div>
             </div>
           </div>
         </header>
 
         <Outlet />
-      </main>
+      </div>
     </div>
   );
 }

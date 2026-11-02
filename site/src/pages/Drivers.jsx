@@ -1,7 +1,8 @@
-
 import { useEffect, useState } from "react";
 import { getAdminUsers } from "../services/api";
+import { PageHead, Card, Notice } from "../components/ui";
 
+// Lists the registered users returned by GET /api/admin/users (newest first).
 export default function Drivers({ token, onUnauthorised }) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -32,9 +33,7 @@ export default function Drivers({ token, onUnauthorised }) {
 
         setError(err.message || "Could not load registered users.");
       } finally {
-        if (active) {
-          setLoading(false);
-        }
+        if (active) setLoading(false);
       }
     }
 
@@ -45,140 +44,60 @@ export default function Drivers({ token, onUnauthorised }) {
     };
   }, [token, onUnauthorised]);
 
-  const filteredUsers = users.filter((user) => {
-    const term = search.trim().toLowerCase();
+  const term = search.trim().toLowerCase();
 
-    return [
-      user.id,
-      user.full_name,
-      user.email,
-      user.phone_number,
-    ].some((value) =>
+  const filteredUsers = users.filter((user) =>
+    [user.id, user.full_name, user.email, user.phone_number].some((value) =>
       String(value ?? "").toLowerCase().includes(term)
-    );
-  });
+    )
+  );
 
   return (
     <div className="page">
-      <div style={{ marginBottom: 24 }}>
-        <p style={{ color: "#a78bfa", marginBottom: 6 }}>
-          PARKWISE / ADMINISTRATION
-        </p>
+      <PageHead title="Drivers" subtitle="People who have registered with ParkWise." />
 
-        <h1 style={{ margin: 0 }}>Drivers</h1>
+      {error && <Notice kind="error">{error}</Notice>}
 
-        <p style={{ opacity: 0.75 }}>
-          View registered user accounts and their contact details.
-        </p>
-      </div>
-
-      <section className="panel" style={{ padding: 24 }}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            gap: 16,
-            flexWrap: "wrap",
-            alignItems: "center",
-            marginBottom: 20,
-          }}
-        >
-          <div>
-            <h2 style={{ marginTop: 0 }}>Registered Users</h2>
-
-            <p style={{ opacity: 0.75 }}>
-              {users.length} users returned by the backend
-            </p>
-          </div>
-
+      <Card title="Registered Users" subtitle={`${users.length} users returned by the backend`}>
+        <div className="toolbar">
           <input
             type="search"
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(e) => setSearch(e.target.value)}
             placeholder="Search name, email or phone..."
             aria-label="Search registered users"
-            style={{
-              padding: 12,
-              borderRadius: 8,
-              border: "1px solid #777",
-              background: "transparent",
-              color: "inherit",
-              maxWidth: "100%",
-              width: 300,
-              boxSizing: "border-box",
-            }}
           />
         </div>
 
-        {loading && <p>Loading registered users...</p>}
-
-        {!loading && error && (
-          <p role="alert" style={{ color: "#ef4444" }}>
-            {error}
-          </p>
-        )}
-
-        {!loading && !error && (
-          <div style={{ overflowX: "auto" }}>
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                textAlign: "left",
-              }}
-            >
+        {loading ? (
+          <p className="muted">Loading registered users...</p>
+        ) : (
+          <div className="table-wrap">
+            <table>
               <thead>
                 <tr>
-                  {[
-                    "Full Name",
-                    "Email",
-                    "Phone Number",
-                    "Registered",
-                  ].map((heading) => (
-                    <th
-                      key={heading}
-                      style={{
-                        padding: 12,
-                        borderBottom: "1px solid #777",
-                      }}
-                    >
-                      {heading}
-                    </th>
-                  ))}
+                  <th>Name</th>
+                  <th>Email</th>
+                  <th>Phone</th>
+                  <th>Registered</th>
                 </tr>
               </thead>
-
               <tbody>
-                {filteredUsers.map((user) => (
-                  <tr key={user.id}>
-                    <td style={{ padding: 12 }}>
-                      {user.full_name || "—"}
+                {filteredUsers.map((user, index) => (
+                  <tr key={user.id ?? index}>
+                    <td>
+                      <b>{user.full_name || "—"}</b>
                     </td>
-
-                    <td style={{ padding: 12 }}>
-                      {user.email || "—"}
-                    </td>
-
-                    <td style={{ padding: 12 }}>
-                      {user.phone_number || "—"}
-                    </td>
-
-                    <td style={{ padding: 12 }}>
-                      {user.created_at
-                        ? new Date(user.created_at).toLocaleDateString(
-                            "en-ZA"
-                          )
-                        : "—"}
-                    </td>
+                    <td>{user.email || "—"}</td>
+                    <td>{user.phone_number || "—"}</td>
+                    <td>{user.created_at ? new Date(user.created_at).toLocaleDateString("en-ZA") : "—"}</td>
                   </tr>
                 ))}
 
                 {filteredUsers.length === 0 && (
                   <tr>
-                    <td colSpan={4} style={{ padding: 18 }}>
-                      {search
-                        ? "No users match your search."
-                        : "No registered users were returned."}
+                    <td colSpan={4} className="muted">
+                      {users.length > 0 ? "No users match your search." : "No registered users were returned."}
                     </td>
                   </tr>
                 )}
@@ -186,8 +105,7 @@ export default function Drivers({ token, onUnauthorised }) {
             </table>
           </div>
         )}
-      </section>
+      </Card>
     </div>
   );
 }
-

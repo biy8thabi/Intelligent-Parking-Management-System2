@@ -1,6 +1,28 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getActiveSessions, getParkingAvailability } from "../services/api";
+import { getActiveSessions, getAdminUsers, getAllSessions, getParkingAvailability } from "../services/api";
 import useAutoRefresh from "../useAutoRefresh";
+import { PageHead, Card, Stat, Notice, Updated } from "../components/ui";
+import {
+  bayLabel,
+  describeLoadError,
+  downloadCSV,
+  estimateFee,
+  formatDate,
+  formatDateTime,
+  formatDuration,
+  formatMoney,
+  localDate,
+} from "../utils";
+
+const TABS = [
+  ["occupancy", "Parking Occupancy"],
+  ["zones", "Zones"],
+  ["sessions", "Active Sessions"],
+  ["history", "History & Fees"],
+  ["drivers", "Drivers"],
+];
+
+const DAY = 24 * 60 * 60 * 1000;
 
 function getVehicle(session) {
   return (
@@ -16,69 +38,25 @@ function getDriver(session) {
   return session.users?.full_name ?? session.driver_name ?? "Not supplied";
 }
 
-function getBay(session) {
-  const bay = session.parking_spaces;
-  if (!bay) return "—";
-  return [bay.zone, bay.bay_number].filter(Boolean).join("-") || "—";
-}
-
 function getStartMs(session) {
   const ms = session.entry_time ? Date.parse(session.entry_time) : NaN;
   return Number.isNaN(ms) ? null : ms;
 }
 
-function getStarted(session) {
-  const ms = getStartMs(session);
-  return ms === null ? "—" : new Date(ms).toLocaleString("en-ZA");
-}
-
-function formatDuration(ms) {
-  if (ms === null || ms < 0) return "—";
-  const totalMinutes = Math.floor(ms / 60000);
-  const days = Math.floor(totalMinutes / 1440);
-  const hours = Math.floor((totalMinutes % 1440) / 60);
-  const minutes = totalMinutes % 60;
-  if (days > 0) return `${days}d ${hours}h`;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  return `${minutes}m`;
-}
-
-// Local calendar date (toISOString would use UTC and be a day off after midnight in SAST).
-function localDate() {
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-}
-
-function escapeCSV(value) {
-  const text = String(value ?? "");
-  // Protect spreadsheet programs against CSV formula injection.
-  const safe = /^[\s]*[=+\-@\t\r]/.test(text) ? "'" + text : text;
-  return `"${safe.replace(/"/g, '""')}"`;
-}
-
-function downloadCSV(filename, rows) {
-  const csv = rows.map((row) => row.map(escapeCSV).join(",")).join("\r\n");
-  const blob = new Blob(["﻿", csv], { type: "text/csv;charset=utf-8" });
-
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+// Whole-day label such as 2026-11-02, in local time.
+function dayKey(ms) {
+  return localDate(new Date(ms));
 }
 
 export default function Reports({ token, onUnauthorised }) {
   const [availability, setAvailability] = useState(null);
   const [sessions, setSessions] = useState([]);
+  const [history, setHistory] = useState(null);
+  const [users, setUsers] = useState(null);
+
+  const [errors, setErrors] = useState({ availability: "", sessions: "", history: "", users: "" });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [availabilityError, setAvailabilityError] = useState("");
-  const [sessionsError, setSessionsError] = useState("");
   const [reportType, setReportType] = useState("occupancy");
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState("longest");
@@ -87,49 +65,75 @@ export default function Reports({ token, onUnauthorised }) {
 
   const loadReports = useCallback(
     async (isRefresh = false) => {
-      if (isRefresh) {
-        setRefreshing(true);
-      } else {
-        setLoading(true);
-      }
+      if (isRefresh) setRefreshing(true);
+      else setLoading(true);
 
-      const [availabilityResult, sessionsResult] = await Promise.allSettled([
+      const [availabilityResult, sessionsResult, historyResult, usersResult] = await Promise.allSettled([
         getParkingAvailability(),
         getActiveSessions(token),
+        getAllSessions(token),
+        getAdminUsers(token),
       ]);
+
+      const next = { availability: "", sessions: "", history: "", users: "" };
+      let expired = false;
+
+      const note = (result) => {
+        if (result.status === "rejected" && (result.reason?.status === 401 || result.reason?.status === 403)) {
+          expired = true;
+        }
+      };
+      [sessionsResult, historyResult, usersResult].forEach(note);
 
       if (availabilityResult.status === "fulfilled") {
         setAvailability(availabilityResult.value);
-        setAvailabilityError("");
       } else {
         setAvailability(null);
-        setAvailabilityError(
-          availabilityResult.reason?.message || "Could not load parking availability."
-        );
+        next.availability = availabilityResult.reason?.message || "Could not load parking availability.";
       }
 
       if (sessionsResult.status === "fulfilled") {
         const records = sessionsResult.value?.active_sessions;
-
         if (Array.isArray(records)) {
           setSessions(records);
-          setSessionsError("");
         } else {
           setSessions([]);
-          setSessionsError("Unexpected sessions response from backend.");
+          next.sessions = "Unexpected sessions response from backend.";
         }
       } else {
         setSessions([]);
-        const reason = sessionsResult.reason;
-        if (reason?.status === 401 || reason?.status === 403) {
-          onUnauthorised?.();
-        }
-        setSessionsError(reason?.message || "Could not load parking sessions.");
+        next.sessions = sessionsResult.reason?.message || "Could not load parking sessions.";
       }
 
+      if (historyResult.status === "fulfilled" && Array.isArray(historyResult.value?.sessions)) {
+        setHistory(historyResult.value.sessions);
+      } else {
+        setHistory(null);
+        next.history =
+          historyResult.status === "rejected"
+            ? describeLoadError(historyResult.reason, "Session history")
+            : "Unexpected session history response from backend.";
+      }
+
+      if (usersResult.status === "fulfilled") {
+        const records = Array.isArray(usersResult.value) ? usersResult.value : usersResult.value?.users;
+        if (Array.isArray(records)) {
+          setUsers(records);
+        } else {
+          setUsers(null);
+          next.users = "Unexpected drivers response from backend.";
+        }
+      } else {
+        setUsers(null);
+        next.users = describeLoadError(usersResult.reason, "The drivers list");
+      }
+
+      setErrors(next);
       setLastUpdated(new Date());
       setLoading(false);
       setRefreshing(false);
+
+      if (expired) onUnauthorised?.();
     },
     [token, onUnauthorised]
   );
@@ -146,20 +150,38 @@ export default function Reports({ token, onUnauthorised }) {
     return () => clearInterval(tick);
   }, []);
 
+  /* ---------- Occupancy ---------- */
   const totalSpaces = Number(availability?.total_spaces ?? 0);
   const availableSpaces = Number(availability?.available_count ?? 0);
   const occupiedSpaces = Number(availability?.occupied_count ?? 0);
   const disabledSpaces = Number(availability?.disabled_count ?? 0);
+  const occupancyRate = totalSpaces > 0 ? Math.min(100, Math.max(0, (occupiedSpaces / totalSpaces) * 100)) : 0;
 
-  const occupancyRate =
-    totalSpaces > 0 ? Math.min(100, Math.max(0, (occupiedSpaces / totalSpaces) * 100)) : 0;
+  /* ---------- Zones: free bays (availability) + occupied bays (active sessions) ---------- */
+  const zoneRows = useMemo(() => {
+    const map = new Map();
+    const row = (zone) => {
+      if (!map.has(zone)) map.set(zone, { zone, free: 0, accessible: 0, occupied: 0 });
+      return map.get(zone);
+    };
+    (availability?.available_spaces ?? []).forEach((s) => {
+      const r = row(s.zone ?? "—");
+      r.free += 1;
+      if (s.is_accessible) r.accessible += 1;
+    });
+    sessions.forEach((s) => {
+      if (s.parking_spaces?.zone) row(s.parking_spaces.zone).occupied += 1;
+    });
+    return [...map.values()].sort((a, b) => String(a.zone).localeCompare(String(b.zone), undefined, { numeric: true }));
+  }, [availability, sessions]);
 
+  /* ---------- Active sessions ---------- */
   const filteredSessions = useMemo(() => {
     const term = search.trim().toLowerCase();
 
     const matches = term
       ? sessions.filter((session) =>
-          [session.id, getVehicle(session), getDriver(session), getBay(session)].some((value) =>
+          [session.id, getVehicle(session), getDriver(session), bayLabel(session.parking_spaces)].some((value) =>
             String(value ?? "").toLowerCase().includes(term)
           )
         )
@@ -184,16 +206,85 @@ export default function Reports({ token, onUnauthorised }) {
       })
       .filter(Boolean);
 
-    if (durations.length === 0) return { average: null, longest: null };
+    const buckets = [
+      { label: "Under 1 hour", count: 0 },
+      { label: "1 to 3 hours", count: 0 },
+      { label: "3 to 8 hours", count: 0 },
+      { label: "Over 8 hours (check for stuck sessions)", count: 0 },
+    ];
+    let estimated = 0;
+
+    durations.forEach(({ ms }) => {
+      const hours = ms / 3600000;
+      if (hours < 1) buckets[0].count += 1;
+      else if (hours < 3) buckets[1].count += 1;
+      else if (hours < 8) buckets[2].count += 1;
+      else buckets[3].count += 1;
+      estimated += estimateFee(ms / 60000);
+    });
+
+    if (durations.length === 0) return { average: null, longest: null, buckets, estimated: 0 };
 
     const total = durations.reduce((sum, item) => sum + item.ms, 0);
     const longest = durations.reduce((a, b) => (b.ms > a.ms ? b : a));
 
-    return { average: total / durations.length, longest };
+    return { average: total / durations.length, longest, buckets, estimated };
   }, [sessions, now]);
 
+  /* ---------- History and fees (completed sessions) ---------- */
+  const historyStats = useMemo(() => {
+    if (!history) return null;
+
+    const completed = history.filter((s) => s.session_status === "completed");
+    const fees = completed.reduce((sum, s) => sum + Number(s.fee_amount || 0), 0);
+
+    const stays = completed
+      .map((s) => (s.entry_time && s.exit_time ? Date.parse(s.exit_time) - Date.parse(s.entry_time) : NaN))
+      .filter((ms) => Number.isFinite(ms) && ms >= 0);
+
+    // The last 7 days, today first.
+    const days = [];
+    for (let i = 0; i < 7; i += 1) {
+      const key = dayKey(now - i * DAY);
+      days.push({ key, sessions: 0, fees: 0 });
+    }
+    completed.forEach((s) => {
+      const exit = s.exit_time ? Date.parse(s.exit_time) : NaN;
+      if (Number.isNaN(exit)) return;
+      const day = days.find((d) => d.key === dayKey(exit));
+      if (day) {
+        day.sessions += 1;
+        day.fees += Number(s.fee_amount || 0);
+      }
+    });
+
+    return {
+      total: history.length,
+      completed: completed.length,
+      fees,
+      averageFee: completed.length ? fees / completed.length : 0,
+      averageStay: stays.length ? stays.reduce((a, b) => a + b, 0) / stays.length : null,
+      days,
+    };
+  }, [history, now]);
+
+  /* ---------- Drivers ---------- */
+  const driverStats = useMemo(() => {
+    if (!users) return null;
+    const created = (u) => (u.created_at ? Date.parse(u.created_at) : NaN);
+    const within = (days) => users.filter((u) => !Number.isNaN(created(u)) && now - created(u) <= days * DAY).length;
+    const newest = [...users].sort((a, b) => (created(b) || 0) - (created(a) || 0));
+    return { total: users.length, last7: within(7), last30: within(30), newest };
+  }, [users, now]);
+
+  /* ---------- Export ---------- */
   const canExport =
-    !loading && (reportType === "occupancy" ? Boolean(availability) : !sessionsError);
+    !loading &&
+    ((reportType === "occupancy" && Boolean(availability)) ||
+      (reportType === "zones" && Boolean(availability)) ||
+      (reportType === "sessions" && !errors.sessions) ||
+      (reportType === "history" && Boolean(historyStats)) ||
+      (reportType === "drivers" && Boolean(driverStats)));
 
   function exportReport() {
     if (!canExport) return;
@@ -213,319 +304,390 @@ export default function Reports({ token, onUnauthorised }) {
         ["Out of service spaces", disabledSpaces],
         ["Occupancy rate (%)", occupancyRate.toFixed(1)],
       ];
-    } else {
+    } else if (reportType === "zones") {
+      rows = [
+        ["ParkWise Zone Report"],
+        ["Generated", generated],
+        [],
+        ["Zone", "Free bays", "Accessible free bays", "Occupied bays"],
+        ...zoneRows.map((z) => [z.zone, z.free, z.accessible, z.occupied]),
+      ];
+    } else if (reportType === "sessions") {
       rows = [
         ["ParkWise Active Parking Sessions Report"],
         ["Generated", generated],
         [],
-        ["Session ID", "Vehicle", "Driver", "Bay", "Started", "Time parked"],
-        ...filteredSessions.map((session) => [
-          session.id ?? "",
-          getVehicle(session),
-          getDriver(session),
-          getBay(session),
-          getStarted(session),
-          getStartMs(session) === null ? "" : formatDuration(now - getStartMs(session)),
-        ]),
+        ["Session ID", "Vehicle", "Driver", "Bay", "Started", "Time parked", "Estimated fee so far (R)"],
+        ...filteredSessions.map((session) => {
+          const start = getStartMs(session);
+          return [
+            session.id ?? "",
+            getVehicle(session),
+            getDriver(session),
+            bayLabel(session.parking_spaces),
+            formatDateTime(session.entry_time),
+            start === null ? "" : formatDuration(now - start),
+            start === null ? "" : estimateFee((now - start) / 60000).toFixed(2),
+          ];
+        }),
+      ];
+    } else if (reportType === "history") {
+      rows = [
+        ["ParkWise Session History and Fees Report"],
+        ["Generated", generated],
+        ["Note", "Fees charged on completed sessions. This is not a record of payments received."],
+        [],
+        ["Metric", "Value"],
+        ["Sessions recorded", historyStats.total],
+        ["Completed sessions", historyStats.completed],
+        ["Fees charged (R)", historyStats.fees.toFixed(2)],
+        ["Average fee (R)", historyStats.averageFee.toFixed(2)],
+        ["Average stay", historyStats.averageStay === null ? "" : formatDuration(historyStats.averageStay)],
+        [],
+        ["Date", "Sessions completed", "Fees charged (R)"],
+        ...historyStats.days.map((d) => [d.key, d.sessions, d.fees.toFixed(2)]),
+      ];
+    } else {
+      rows = [
+        ["ParkWise Drivers Report"],
+        ["Generated", generated],
+        [],
+        ["Name", "Email", "Phone", "Registered"],
+        ...driverStats.newest.map((u) => [u.full_name ?? "", u.email ?? "", u.phone_number ?? "", formatDate(u.created_at)]),
       ];
     }
 
     downloadCSV(`parkwise-${reportType}-${localDate()}.csv`, rows);
   }
 
-  const buttonStyle = {
-    padding: "11px 16px",
-    borderRadius: "10px",
-    border: "1px solid #7c3aed",
-    cursor: "pointer",
-    fontWeight: 600,
-  };
-
-  const panelStyle = { padding: "22px", borderRadius: "14px" };
-
   return (
     <div className="page">
-      <style>{`
-        @media print {
-          body { background: white !important; color: black !important; }
-          .side, .topbar, .report-actions, .report-tabs, .report-search { display: none !important; }
-          .shell { display: block !important; }
-          .main-area { margin: 0 !important; padding: 0 !important; }
-          .page { color: black !important; background: white !important; }
-          .panel { color: black !important; background: white !important; border: 1px solid #ddd !important; break-inside: avoid; }
-          .report-table th, .report-table td { color: black !important; }
-        }
-      `}</style>
+      <PageHead title="Reports" subtitle="Occupancy, sessions, fees and drivers. Updates automatically.">
+        <button className="btn" type="button" onClick={() => loadReports(true)} disabled={loading || refreshing}>
+          {refreshing ? "Refreshing..." : "Refresh"}
+        </button>
+        <button className="btn" type="button" onClick={() => window.print()}>
+          Print
+        </button>
+        <button className="btn btn-primary" type="button" onClick={exportReport} disabled={!canExport}>
+          Export CSV
+        </button>
+      </PageHead>
 
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          flexWrap: "wrap",
-          gap: "16px",
-          marginBottom: "24px",
-        }}
-      >
-        <div>
-          <p style={{ color: "#a78bfa", marginBottom: "6px" }}>PARKWISE / ADMINISTRATION</p>
-          <h1 style={{ margin: 0 }}>Reports</h1>
-          <p style={{ opacity: 0.75 }}>Parking activity and operational performance.</p>
-          {lastUpdated && (
-            <p style={{ fontSize: "13px", opacity: 0.65 }}>
-              Last refreshed: {lastUpdated.toLocaleString("en-ZA")}
-            </p>
-          )}
-        </div>
-
-        <div className="report-actions" style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
+      <div className="tabs no-print">
+        {TABS.map(([value, label]) => (
           <button
+            key={value}
             type="button"
-            onClick={() => loadReports(true)}
-            disabled={loading || refreshing}
-            style={{ ...buttonStyle, background: "transparent", color: "inherit" }}
+            className={"btn" + (reportType === value ? " btn-active" : "")}
+            aria-pressed={reportType === value}
+            onClick={() => setReportType(value)}
           >
-            {refreshing ? "Refreshing..." : "Refresh"}
-          </button>
-
-          <button
-            type="button"
-            onClick={exportReport}
-            disabled={!canExport}
-            style={{ ...buttonStyle, background: "#7c3aed", color: "#fff", opacity: canExport ? 1 : 0.5 }}
-          >
-            Export CSV
-          </button>
-
-          <button
-            type="button"
-            onClick={() => canExport && window.print()}
-            disabled={!canExport}
-            style={{ ...buttonStyle, background: "#4c1d95", color: "#fff", opacity: canExport ? 1 : 0.5 }}
-          >
-            Print / Save PDF
-          </button>
-        </div>
-      </div>
-
-      <div className="report-tabs" style={{ display: "flex", flexWrap: "wrap", gap: "12px", marginBottom: "24px" }}>
-        {[
-          { value: "occupancy", label: "Parking Occupancy" },
-          { value: "sessions", label: "Active Sessions" },
-        ].map((item) => (
-          <button
-            key={item.value}
-            type="button"
-            onClick={() => setReportType(item.value)}
-            aria-pressed={reportType === item.value}
-            style={{
-              ...buttonStyle,
-              background: reportType === item.value ? "#7c3aed" : "transparent",
-              color: reportType === item.value ? "#fff" : "inherit",
-            }}
-          >
-            {item.label}
+            {label}
           </button>
         ))}
       </div>
 
-      {loading && <p>Loading report data...</p>}
+      <Updated time={lastUpdated} />
 
+      {loading && <p className="muted">Loading report data...</p>}
+
+      {/* ---------------- Parking occupancy ---------------- */}
       {!loading && reportType === "occupancy" && (
         <>
-          {availabilityError && (
-            <section className="panel" style={panelStyle}>
-              <h3>Availability unavailable</h3>
-              <p>{availabilityError}</p>
-            </section>
-          )}
+          {errors.availability && <Notice kind="error">{errors.availability}</Notice>}
 
-          {availability && (
+          <div className="stats">
+            <Stat label="Total Spaces" value={availability ? totalSpaces : "—"} />
+            <Stat label="Available Spaces" value={availability ? availableSpaces : "—"} tone="good" />
+            <Stat label="Occupied Spaces" value={availability ? occupiedSpaces : "—"} tone="brand" />
+            <Stat label="Occupancy Rate" value={availability ? `${occupancyRate.toFixed(1)}%` : "—"} />
+          </div>
+
+          <Card title="Occupancy overview">
+            <div className="meter" aria-hidden="true">
+              <div style={{ width: `${occupancyRate}%` }} />
+            </div>
+            <p className="muted">
+              {availability
+                ? `${occupiedSpaces} of ${totalSpaces} parking spaces are occupied.`
+                : "Occupancy information could not be loaded."}
+            </p>
+
+            {availability && (
+              <div className="table-wrap" style={{ marginTop: 12 }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Status</th>
+                      <th>Bays</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>Occupied</td>
+                      <td>{occupiedSpaces}</td>
+                    </tr>
+                    <tr>
+                      <td>Available</td>
+                      <td>{availableSpaces}</td>
+                    </tr>
+                    <tr>
+                      <td>Out of service</td>
+                      <td>{disabledSpaces}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+        </>
+      )}
+
+      {/* ---------------- Zones ---------------- */}
+      {!loading && reportType === "zones" && (
+        <>
+          {errors.availability && <Notice kind="error">{errors.availability}</Notice>}
+          {errors.sessions && <Notice kind="error">Occupied bays could not be counted: {errors.sessions}</Notice>}
+
+          <Card title="Bays by zone" subtitle="Free bays come from the availability list. Occupied bays are counted from active sessions.">
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Zone</th>
+                    <th>Free bays</th>
+                    <th>Accessible free</th>
+                    <th>Occupied bays</th>
+                    <th>In use</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {zoneRows.map((z) => {
+                    const used = z.free + z.occupied;
+                    return (
+                      <tr key={z.zone}>
+                        <td>
+                          <b>{z.zone}</b>
+                        </td>
+                        <td>{z.free}</td>
+                        <td>{z.accessible}</td>
+                        <td>{z.occupied}</td>
+                        <td>{used > 0 ? `${Math.round((z.occupied / used) * 100)}%` : "—"}</td>
+                      </tr>
+                    );
+                  })}
+                  {zoneRows.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="muted">
+                        No zone information is available right now.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <p className="hint" style={{ marginTop: 10 }}>
+              Bays that are out of service are not counted in this table.
+            </p>
+          </Card>
+        </>
+      )}
+
+      {/* ---------------- Active sessions ---------------- */}
+      {!loading && reportType === "sessions" && (
+        <>
+          {errors.sessions && <Notice kind="error">{errors.sessions}</Notice>}
+
+          <div className="stats">
+            <Stat label="Active sessions" value={errors.sessions ? "—" : sessions.length} />
+            <Stat
+              label="Average time parked"
+              value={sessionStats.average === null ? "—" : formatDuration(sessionStats.average)}
+            />
+            <Stat
+              label="Longest parked"
+              value={sessionStats.longest ? formatDuration(sessionStats.longest.ms) : "—"}
+              note={sessionStats.longest ? getVehicle(sessionStats.longest.session) : undefined}
+            />
+            <Stat label="Estimated fees so far" value={formatMoney(sessionStats.estimated)} note="Estimate at R10/hour" tone="brand" />
+          </div>
+
+          <Card title="How long vehicles have been parked">
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Stay so far</th>
+                    <th>Vehicles</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sessionStats.buckets.map((b) => (
+                    <tr key={b.label}>
+                      <td>{b.label}</td>
+                      <td>{b.count}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+
+          <Card title="Active Parking Sessions" subtitle={`${filteredSessions.length} shown`}>
+            <div className="toolbar no-print">
+              <input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search vehicle, driver or bay..."
+                aria-label="Search sessions"
+              />
+              <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} aria-label="Sort sessions">
+                <option value="longest">Longest parked first</option>
+                <option value="newest">Newest first</option>
+              </select>
+            </div>
+
+            <div className="table-wrap">
+              <table className="report-table">
+                <thead>
+                  <tr>
+                    <th>Vehicle</th>
+                    <th>Driver</th>
+                    <th>Bay</th>
+                    <th>Started</th>
+                    <th>Time parked</th>
+                    <th>Estimated fee</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredSessions.map((session, index) => {
+                    const start = getStartMs(session);
+                    return (
+                      <tr key={session.id ?? index}>
+                        <td>
+                          <b>{getVehicle(session)}</b>
+                        </td>
+                        <td>{getDriver(session)}</td>
+                        <td>{bayLabel(session.parking_spaces)}</td>
+                        <td>{formatDateTime(session.entry_time)}</td>
+                        <td>{start === null ? "—" : formatDuration(now - start)}</td>
+                        <td>{start === null ? "—" : formatMoney(estimateFee((now - start) / 60000))}</td>
+                      </tr>
+                    );
+                  })}
+
+                  {filteredSessions.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="muted">
+                        {errors.sessions ? "Session records are unavailable." : "No matching active sessions."}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </>
+      )}
+
+      {/* ---------------- History and fees ---------------- */}
+      {!loading && reportType === "history" && (
+        <>
+          {errors.history && <Notice kind="error">{errors.history}</Notice>}
+
+          {historyStats && (
             <>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
-                  gap: "16px",
-                  marginBottom: "24px",
-                }}
-              >
-                {[
-                  { label: "Total Spaces", value: totalSpaces },
-                  { label: "Available", value: availableSpaces },
-                  { label: "Occupied", value: occupiedSpaces },
-                  { label: "Out of service", value: disabledSpaces },
-                  { label: "Occupancy Rate", value: `${occupancyRate.toFixed(1)}%` },
-                ].map((item) => (
-                  <section key={item.label} className="panel" style={panelStyle}>
-                    <p style={{ opacity: 0.7, marginTop: 0 }}>{item.label}</p>
-                    <h2 style={{ fontSize: "29px", marginBottom: 0 }}>{item.value}</h2>
-                  </section>
-                ))}
+              <div className="stats">
+                <Stat label="Sessions recorded" value={historyStats.total} />
+                <Stat label="Completed sessions" value={historyStats.completed} />
+                <Stat label="Fees charged" value={formatMoney(historyStats.fees)} note="Completed sessions" tone="brand" />
+                <Stat label="Average fee" value={formatMoney(historyStats.averageFee)} />
               </div>
 
-              <section className="panel" style={panelStyle}>
-                <h3>Occupancy Overview</h3>
-
-                <div
-                  style={{
-                    width: "100%",
-                    height: "18px",
-                    background: "rgba(127,127,127,0.2)",
-                    borderRadius: "20px",
-                    overflow: "hidden",
-                    display: "flex",
-                    margin: "20px 0 12px",
-                  }}
-                >
-                  {[
-                    { n: occupiedSpaces, color: "#8b5cf6" },
-                    { n: availableSpaces, color: "#34d399" },
-                    { n: disabledSpaces, color: "#fbbf24" },
-                  ].map((part, i) => (
-                    <div
-                      key={i}
-                      style={{
-                        width: `${totalSpaces > 0 ? Math.min(100, (part.n / totalSpaces) * 100) : 0}%`,
-                        height: "100%",
-                        background: part.color,
-                      }}
-                    />
-                  ))}
+              <Card
+                title="Last 7 days"
+                subtitle="Completed sessions grouped by the day they ended. Fees are charged amounts, not confirmed payments."
+              >
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Sessions completed</th>
+                        <th>Fees charged</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historyStats.days.map((d) => (
+                        <tr key={d.key}>
+                          <td>{d.key}</td>
+                          <td>{d.sessions}</td>
+                          <td>{formatMoney(d.fees)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-
-                <p>
-                  {occupiedSpaces} of {totalSpaces} parking spaces are occupied (
-                  {occupancyRate.toFixed(1)}%).
+                <p className="hint" style={{ marginTop: 10 }}>
+                  Average stay on completed sessions: {historyStats.averageStay === null ? "—" : formatDuration(historyStats.averageStay)}.
                 </p>
-
-                <p>
-                  <span style={{ color: "#8b5cf6" }}>●</span> Occupied: {occupiedSpaces}
-                  {"  "}
-                  <span style={{ color: "#34d399" }}>●</span> Available: {availableSpaces}
-                  {"  "}
-                  <span style={{ color: "#fbbf24" }}>●</span> Out of service: {disabledSpaces}
-                </p>
-              </section>
+              </Card>
             </>
           )}
         </>
       )}
 
-      {!loading && reportType === "sessions" && (
-        <section className="panel" style={panelStyle}>
-          {sessionsError ? (
-            <p role="alert">{sessionsError}</p>
-          ) : (
+      {/* ---------------- Drivers ---------------- */}
+      {!loading && reportType === "drivers" && (
+        <>
+          {errors.users && <Notice kind="error">{errors.users}</Notice>}
+
+          {driverStats && (
             <>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
-                  gap: "16px",
-                  marginBottom: "8px",
-                }}
-              >
-                {[
-                  { label: "Active sessions", value: sessions.length },
-                  { label: "Average time parked", value: formatDuration(sessionStats.average) },
-                  {
-                    label: "Longest session",
-                    value: sessionStats.longest
-                      ? `${formatDuration(sessionStats.longest.ms)} · ${getVehicle(sessionStats.longest.session)}`
-                      : "—",
-                  },
-                ].map((item) => (
-                  <section key={item.label} className="panel" style={panelStyle}>
-                    <p style={{ opacity: 0.7, marginTop: 0 }}>{item.label}</p>
-                    <h2 style={{ fontSize: "22px", marginBottom: 0 }}>{item.value}</h2>
-                  </section>
-                ))}
+              <div className="stats">
+                <Stat label="Registered drivers" value={driverStats.total} />
+                <Stat label="New in the last 7 days" value={driverStats.last7} tone="good" />
+                <Stat label="New in the last 30 days" value={driverStats.last30} />
               </div>
 
-              <input
-                className="report-search"
-                type="search"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search session, vehicle or driver..."
-                aria-label="Search parking sessions"
-                style={{
-                  width: "100%",
-                  maxWidth: "420px",
-                  padding: "12px",
-                  margin: "12px 0 20px",
-                  borderRadius: "8px",
-                  border: "1px solid #777",
-                  background: "transparent",
-                  color: "inherit",
-                  boxSizing: "border-box",
-                }}
-              />
-
-              <div
-                className="report-search"
-                style={{ display: "flex", gap: "12px", alignItems: "center", flexWrap: "wrap", marginBottom: "8px" }}
-              >
-                <label style={{ fontSize: "13px", opacity: 0.8 }}>
-                  Sort:{" "}
-                  <select
-                    value={sortBy}
-                    onChange={(event) => setSortBy(event.target.value)}
-                    style={{ padding: "6px", borderRadius: "6px", background: "transparent", color: "inherit", border: "1px solid #777" }}
-                  >
-                    <option value="longest">Longest parked first</option>
-                    <option value="newest">Newest first</option>
-                  </select>
-                </label>
-              </div>
-
-              <p style={{ fontSize: "13px", opacity: 0.7 }}>
-                Showing {filteredSessions.length} of {sessions.length} sessions. Time parked updates automatically.
-              </p>
-
-              <div style={{ overflowX: "auto" }}>
-                <table className="report-table" style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr>
-                      {["Session ID", "Vehicle", "Driver", "Bay", "Started", "Time parked"].map((heading) => (
-                        <th
-                          key={heading}
-                          style={{ textAlign: "left", padding: "12px", borderBottom: "1px solid #777" }}
-                        >
-                          {heading}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-
-                  <tbody>
-                    {filteredSessions.map((session, index) => (
-                      <tr key={session.id ?? index}>
-                        <td style={{ padding: "12px" }}>{session.id ?? "—"}</td>
-                        <td style={{ padding: "12px" }}>{getVehicle(session)}</td>
-                        <td style={{ padding: "12px" }}>{getDriver(session)}</td>
-                        <td style={{ padding: "12px" }}>{getBay(session)}</td>
-                        <td style={{ padding: "12px" }}>{getStarted(session)}</td>
-                        <td style={{ padding: "12px" }}>
-                          {getStartMs(session) === null ? "—" : formatDuration(now - getStartMs(session))}
-                        </td>
-                      </tr>
-                    ))}
-
-                    {filteredSessions.length === 0 && (
+              <Card title="Newest drivers" subtitle="The 10 most recent registrations.">
+                <div className="table-wrap">
+                  <table>
+                    <thead>
                       <tr>
-                        <td colSpan={6} style={{ padding: "18px" }}>
-                          No matching active sessions.
-                        </td>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Phone</th>
+                        <th>Registered</th>
                       </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {driverStats.newest.slice(0, 10).map((u, index) => (
+                        <tr key={u.id ?? index}>
+                          <td>
+                            <b>{u.full_name || "—"}</b>
+                          </td>
+                          <td>{u.email || "—"}</td>
+                          <td>{u.phone_number || "—"}</td>
+                          <td>{formatDate(u.created_at)}</td>
+                        </tr>
+                      ))}
+                      {driverStats.newest.length === 0 && (
+                        <tr>
+                          <td colSpan={4} className="muted">
+                            No drivers have registered yet.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
             </>
           )}
-        </section>
+        </>
       )}
     </div>
   );

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { getActiveSessions, forceEndSession } from "../services/api";
 import useAutoRefresh from "../useAutoRefresh";
+import { PageHead, Card, Notice } from "../components/ui";
 
 function formatDuration(ms) {
   if (!Number.isFinite(ms) || ms < 0) return "—";
@@ -13,6 +14,7 @@ function formatDuration(ms) {
   return `${minutes}m`;
 }
 
+// Used on its own (Active Sessions page) and inside the Dashboard (embedded).
 export default function Sessions({ token, onUnauthorised, embedded = false }) {
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -85,74 +87,84 @@ export default function Sessions({ token, onUnauthorised, embedded = false }) {
     }
   }
 
-  return (
-    <div className={embedded ? "" : "page"}>
-      <div className="title">
-        <div>
-          <h1>Active Parking Sessions</h1>
-          <p>Live data from the ParkWise backend. Updates automatically.</p>
+  const refreshButton = (
+    <button className="btn btn-primary" type="button" onClick={() => load()} disabled={loading}>
+      {loading ? "Loading..." : "Refresh"}
+    </button>
+  );
+
+  const table = (
+    <>
+      {notice && <Notice kind="success">{notice}</Notice>}
+      {error && <Notice kind="error">{error}</Notice>}
+
+      {loading ? (
+        <p className="muted">Loading sessions…</p>
+      ) : sessions.length === 0 ? (
+        <p className="muted">No active sessions found.</p>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Vehicle</th>
+                <th>Driver</th>
+                <th>Parking bay</th>
+                <th>Started</th>
+                <th>Time parked</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sessions.map((s) => {
+                const start = s.entry_time ? Date.parse(s.entry_time) : NaN;
+                return (
+                  <tr key={s.id}>
+                    <td>
+                      <b>{s.vehicle_registration_number || "—"}</b>
+                    </td>
+                    <td>{s.users?.full_name || "—"}</td>
+                    <td>
+                      {s.parking_spaces
+                        ? [s.parking_spaces.zone, s.parking_spaces.bay_number].filter(Boolean).join("-")
+                        : "—"}
+                    </td>
+                    <td>{Number.isNaN(start) ? "—" : new Date(start).toLocaleString("en-ZA")}</td>
+                    <td>{Number.isNaN(start) ? "—" : formatDuration(now - start)}</td>
+                    <td>
+                      <button
+                        className="btn btn-small"
+                        type="button"
+                        disabled={Boolean(ending)}
+                        onClick={() => end(s)}
+                      >
+                        {ending === s.id ? "Ending…" : "Force End"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-        <button className="primary" onClick={() => load()} disabled={loading}>
-          Refresh
-        </button>
-      </div>
+      )}
+    </>
+  );
 
-      <section className="panel">
-        {notice && <p role="status">{notice}</p>}
-        {error && (
-          <p className="error" role="alert">
-            {error}
-          </p>
-        )}
+  if (embedded) {
+    return (
+      <Card title="Active parking sessions" subtitle="Vehicles parked right now." actions={refreshButton}>
+        {table}
+      </Card>
+    );
+  }
 
-        {loading ? (
-          <p>Loading sessions…</p>
-        ) : sessions.length === 0 ? (
-          <p>No active sessions found.</p>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", textAlign: "left", borderSpacing: "12px" }}>
-              <thead>
-                <tr>
-                  <th>Vehicle</th>
-                  <th>Driver</th>
-                  <th>Parking bay</th>
-                  <th>Started</th>
-                  <th>Time parked</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sessions.map((s) => {
-                  const start = s.entry_time ? Date.parse(s.entry_time) : NaN;
-                  return (
-                    <tr key={s.id}>
-                      <td>{s.vehicle_registration_number || "—"}</td>
-                      <td>{s.users?.full_name || "—"}</td>
-                      <td>
-                        {s.parking_spaces
-                          ? [s.parking_spaces.zone, s.parking_spaces.bay_number].filter(Boolean).join("-")
-                          : "—"}
-                      </td>
-                      <td>{Number.isNaN(start) ? "—" : new Date(start).toLocaleString("en-ZA")}</td>
-                      <td>{Number.isNaN(start) ? "—" : formatDuration(now - start)}</td>
-                      <td>
-                        <button
-                          className="secondary-button"
-                          disabled={Boolean(ending)}
-                          onClick={() => end(s)}
-                        >
-                          {ending === s.id ? "Ending…" : "Force End"}
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+  return (
+    <div className="page">
+      <PageHead title="Active Parking Sessions" subtitle="Live data from the ParkWise backend. Updates automatically.">
+        {refreshButton}
+      </PageHead>
+      <Card>{table}</Card>
     </div>
   );
 }

@@ -118,3 +118,75 @@ export async function getParkingAvailability() {
 export async function getAdminUsers(token) {
   return request('/api/admin/users', { token });
 }
+
+// ---- Session history, bays and tickets (read-only lists) ----
+
+// GET /api/admin/sessions - every session (active, completed, cancelled), newest first.
+export async function getAllSessions(token) {
+  return request('/api/admin/sessions', { token });
+}
+
+// GET /api/admin/parking-spaces - every bay with its current status.
+export async function getAllParkingSpaces(token) {
+  return request('/api/admin/parking-spaces', { token });
+}
+
+// GET /api/admin/tickets - every ticket with its vehicle and bay.
+export async function getAllTickets(token) {
+  return request('/api/admin/tickets', { token });
+}
+
+// ---- Vehicle register ----
+
+export async function getVehicles(token) {
+  return request('/api/admin/vehicles', { token });
+}
+
+export async function createVehicle(vehicle, token) {
+  return request('/api/admin/vehicles', { method: 'POST', body: vehicle, token });
+}
+
+export async function updateVehicle(id, changes, token) {
+  return request(`/api/admin/vehicles/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: changes,
+    token,
+  });
+}
+
+export async function deleteVehicle(id, token) {
+  return request(`/api/admin/vehicles/${encodeURIComponent(id)}`, { method: 'DELETE', token });
+}
+
+// ---- Forgotten-password requests from drivers ----
+
+// status: "pending" (default), "done", "dismissed" or "all"
+export async function getPasswordRequests(status, token) {
+  return request(`/api/admin/password-requests?status=${encodeURIComponent(status)}`, { token });
+}
+
+// Returns a temporary password ONCE. The admin passes it on to the driver.
+export async function resetPasswordRequest(id, token) {
+  return request(`/api/admin/password-requests/${encodeURIComponent(id)}/reset`, {
+    method: 'POST',
+    token,
+  });
+}
+
+export async function dismissPasswordRequest(id, token) {
+  return request(`/api/admin/password-requests/${encodeURIComponent(id)}/dismiss`, {
+    method: 'POST',
+    token,
+  });
+}
+
+// ---- Account ----
+
+// PUT /api/auth/change-password - a wrong current password comes back as HTTP 400.
+export async function changePassword(currentPassword, newPassword, token) {
+  return request('/api/auth/change-password', {
+    method: 'PUT',
+    body: { current_password: currentPassword, new_password: newPassword },
+    token,
+  });
+}

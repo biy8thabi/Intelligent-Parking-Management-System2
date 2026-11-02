@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getParkingAvailability } from "../services/api";
 import useAutoRefresh from "../useAutoRefresh";
+import { PageHead, Card, Stat, Notice, Updated } from "../components/ui";
 
 function bayLabel(space) {
   return [space.zone, space.bay_number].filter(Boolean).join("-") || "—";
@@ -44,6 +45,7 @@ export default function AvailableBays() {
 
   const spaces = useMemo(() => data?.available_spaces ?? [], [data]);
 
+  // One row per zone: how many bays are free, and how many of those are accessible.
   const zones = useMemo(() => {
     const map = new Map();
     spaces.forEach((s) => {
@@ -56,6 +58,7 @@ export default function AvailableBays() {
     return [...map.values()].sort((a, b) => a.zone.localeCompare(b.zone, undefined, { numeric: true }));
   }, [spaces]);
 
+  // The bay list after the search box, zone menu and accessible tick-box are applied.
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
     return spaces
@@ -68,124 +71,119 @@ export default function AvailableBays() {
       .sort((a, b) => bayLabel(a).localeCompare(bayLabel(b), undefined, { numeric: true }));
   }, [spaces, search, zone, accessibleOnly]);
 
-  const panel = { padding: 22, borderRadius: 14 };
-  const th = { textAlign: "left", padding: 12, borderBottom: "1px solid #777" };
-  const field = { padding: 12, borderRadius: 8, border: "1px solid #777", background: "transparent", color: "inherit" };
-
   return (
-    <main className="page">
-      <p style={{ color: "#a78bfa", marginBottom: 6 }}>PARKWISE / ADMINISTRATION</p>
-
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
-        <div>
-          <h1 style={{ margin: 0 }}>Available Bays</h1>
-          <p style={{ opacity: 0.75 }}>Parking bays that are free right now. Updates automatically.</p>
-          {lastUpdated && (
-            <p style={{ fontSize: 13, opacity: 0.65 }}>Last refreshed: {lastUpdated.toLocaleTimeString("en-ZA")}</p>
-          )}
-        </div>
-        <button type="button" className="secondary-button" onClick={() => load()} disabled={loading}>
+    <div className="page">
+      <PageHead title="Available Bays" subtitle="Parking bays that are free right now. Updates automatically.">
+        <button className="btn btn-primary" type="button" onClick={() => load()} disabled={loading}>
           {loading ? "Loading..." : "Refresh"}
         </button>
-      </div>
+      </PageHead>
 
-      {error && (
-        <section className="panel" style={panel}>
-          <h3>Available bays could not be loaded</h3>
-          <p role="alert">{error}</p>
-        </section>
-      )}
+      <Updated time={lastUpdated} />
 
-      {loading && !data && <p>Loading available bays...</p>}
+      {error && <Notice kind="error">{error}</Notice>}
 
-      {data && (
+      {!error && data && (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 16, margin: "20px 0" }}>
-            {[
-              ["Available now", data.available_count],
-              ["Accessible & available", data.accessible_available_count ?? "—"],
-              ["Occupied", data.occupied_count],
-              ["Out of service", data.disabled_count],
-            ].map(([label, value]) => (
-              <section key={label} className="panel" style={panel}>
-                <p style={{ opacity: 0.7, marginTop: 0 }}>{label}</p>
-                <h2 style={{ fontSize: 28, marginBottom: 0 }}>{value}</h2>
-              </section>
-            ))}
+          <div className="stats">
+            <Stat label="Available now" value={Number(data.available_count ?? spaces.length)} tone="good" />
+            <Stat label="Accessible & available" value={Number(data.accessible_available_count ?? 0)} tone="brand" />
+            <Stat label="Occupied" value={Number(data.occupied_count ?? 0)} />
+            <Stat label="Out of service" value={Number(data.disabled_count ?? 0)} tone="warn" />
           </div>
 
-          <section className="panel" style={{ ...panel, marginBottom: 20 }}>
-            <h3 style={{ marginTop: 0 }}>Available by zone</h3>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>{["Zone", "Available bays", "Accessible bays"].map((h) => <th key={h} style={th}>{h}</th>)}</tr>
-                </thead>
-                <tbody>
-                  {zones.map((z) => (
-                    <tr key={z.zone}>
-                      <td style={{ padding: 12 }}><strong>{z.zone}</strong></td>
-                      <td style={{ padding: 12 }}>{z.available}</td>
-                      <td style={{ padding: 12 }}>{z.accessible}</td>
+          <Card title="Available by zone">
+            {zones.length === 0 ? (
+              <p className="muted">No bays are available right now.</p>
+            ) : (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Zone</th>
+                      <th>Available bays</th>
+                      <th>Accessible bays</th>
                     </tr>
-                  ))}
-                  {zones.length === 0 && (
-                    <tr><td colSpan={3} style={{ padding: 18 }}>No bays are available right now.</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </section>
+                  </thead>
+                  <tbody>
+                    {zones.map((z) => (
+                      <tr key={z.zone}>
+                        <td>
+                          <b>{z.zone}</b>
+                        </td>
+                        <td>{z.available}</td>
+                        <td>{z.accessible}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
 
-          <section className="panel" style={panel}>
-            <h3 style={{ marginTop: 0 }}>Bay list</h3>
-
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", marginBottom: 16 }}>
+          <Card title="Bay list">
+            <div className="toolbar">
               <input
                 type="search"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search bay, floor or gate..."
                 aria-label="Search available bays"
-                style={{ ...field, width: 260, maxWidth: "100%" }}
               />
-              <select value={zone} onChange={(e) => setZone(e.target.value)} aria-label="Filter by zone" style={field}>
+              <select value={zone} onChange={(e) => setZone(e.target.value)} aria-label="Filter by zone">
                 <option value="all">All zones</option>
-                {zones.map((z) => <option key={z.zone} value={z.zone}>{z.zone}</option>)}
+                {zones.map((z) => (
+                  <option key={z.zone} value={z.zone}>
+                    {z.zone}
+                  </option>
+                ))}
               </select>
-              <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <input type="checkbox" checked={accessibleOnly} onChange={(e) => setAccessibleOnly(e.target.checked)} />
-                Accessible bays only
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={accessibleOnly}
+                  onChange={(e) => setAccessibleOnly(e.target.checked)}
+                />
+                Accessible only
               </label>
             </div>
 
-            <p style={{ fontSize: 13, opacity: 0.7 }}>Showing {filtered.length} of {spaces.length} available bays.</p>
-
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <div className="table-wrap">
+              <table>
                 <thead>
-                  <tr>{["Bay", "Floor", "Gate", "Accessible"].map((h) => <th key={h} style={th}>{h}</th>)}</tr>
+                  <tr>
+                    <th>Bay</th>
+                    <th>Floor</th>
+                    <th>Gate</th>
+                    <th>Accessible</th>
+                  </tr>
                 </thead>
                 <tbody>
                   {filtered.map((s) => (
                     <tr key={s.id ?? bayLabel(s)}>
-                      <td style={{ padding: 12 }}>{bayLabel(s)}</td>
-                      <td style={{ padding: 12 }}>{s.floor ?? "—"}</td>
-                      <td style={{ padding: 12 }}>{s.gate ?? "—"}</td>
-                      <td style={{ padding: 12 }}>{s.is_accessible ? "Yes" : "No"}</td>
+                      <td>
+                        <b>{bayLabel(s)}</b>
+                      </td>
+                      <td>{s.floor ?? "—"}</td>
+                      <td>{s.gate ?? "—"}</td>
+                      <td>{s.is_accessible ? "Yes" : "No"}</td>
                     </tr>
                   ))}
                   {filtered.length === 0 && (
-                    <tr><td colSpan={4} style={{ padding: 18 }}>
-                      {spaces.length === 0 ? "No bays are available right now." : "No bays match your filters."}
-                    </td></tr>
+                    <tr>
+                      <td colSpan={4} className="muted">
+                        No bays match your filters.
+                      </td>
+                    </tr>
                   )}
                 </tbody>
               </table>
             </div>
-          </section>
+          </Card>
         </>
       )}
-    </main>
+
+      {!error && !data && loading && <p className="muted">Loading available bays…</p>}
+    </div>
   );
 }

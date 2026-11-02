@@ -19,6 +19,11 @@ import Settings from "./pages/Settings";
 import AdminProfile from "./pages/AdminProfile";
 import Drivers from "./pages/Drivers";
 import AvailableBays from "./pages/AvailableBays";
+import SessionHistory from "./pages/SessionHistory";
+import ParkingSpaces from "./pages/ParkingSpaces";
+import Tickets from "./pages/Tickets";
+import Vehicles from "./pages/Vehicles";
+import PasswordRequests from "./pages/PasswordRequests";
 import { request } from "./services/api";
 import {
   clearToken,
@@ -86,10 +91,10 @@ function ProtectedLayout({ admin, onAdmin, theme, onThemeChange, onLogout }) {
   if (error && !admin) {
     return (
       <main className="page">
-        <p role="alert" className="error">
+        <p role="alert" className="notice error">
           {error}
         </p>
-        <button type="button" className="primary" onClick={() => window.location.reload()}>
+        <button type="button" className="btn btn-primary" onClick={() => window.location.reload()}>
           Try again
         </button>
       </main>
@@ -167,17 +172,17 @@ function AppRoutes() {
           element={<Reports token={token} onUnauthorised={logout} />}
         />
 
-        {/* Backend routes for these do not exist yet. */}
-        <Route
-          path="/drivers"
-          element={<Drivers token={token} onUnauthorised={logout} />}
-        />
-
+        <Route path="/history" element={<SessionHistory token={token} onUnauthorised={logout} />} />
+        <Route path="/drivers" element={<Drivers token={token} onUnauthorised={logout} />} />
+        <Route path="/vehicles" element={<Vehicles token={token} onUnauthorised={logout} />} />
+        <Route path="/password-requests" element={<PasswordRequests token={token} onUnauthorised={logout} />} />
+        <Route path="/parking-spaces" element={<ParkingSpaces token={token} onUnauthorised={logout} />} />
+        <Route path="/tickets" element={<Tickets token={token} onUnauthorised={logout} />} />
         <Route path="/available-bays" element={<AvailableBays />} />
         <Route path="/fee-calculator" element={<FeeCalculator />} />
         <Route
           path="/settings"
-          element={<Settings theme={theme} onThemeChange={setTheme} />}
+          element={<Settings theme={theme} onThemeChange={setTheme} token={token} onUnauthorised={logout} />}
         />
         <Route path="/admin-profile" element={<AdminProfile admin={admin} />} />
       </Route>
