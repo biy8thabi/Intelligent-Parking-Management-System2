@@ -38,7 +38,7 @@ export default function Login({ onLogin }) {
     <div className="login">
       <section className="login-info">
         <div className="logo">P</div>
-        <h1>ParkWise</h1>
+        <h1>Intelligent Parking Management System</h1>
         <p>Smart Parking Management System</p>
         <div className="info-card">
           <h3>Admin Portal</h3>
