@@ -53,8 +53,8 @@ export default function ParkingSpaces({ token, onUnauthorised }) {
   }
 
   function exportCSV() {
-    downloadCSV(`parkwise-parking-spaces-${localDate()}.csv`, [
-      ["ParkWise Parking Spaces"],
+    downloadCSV(`ipms-parking-spaces-${localDate()}.csv`, [
+      ["Intelligent Parking Management System - Parking Spaces"],
       ["Generated", new Date().toLocaleString("en-ZA")],
       [],
       ["Bay", "Zone", "Floor", "Gate", "Accessible", "Status", "Last updated"],
