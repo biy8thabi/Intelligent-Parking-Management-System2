@@ -65,7 +65,7 @@ export default function Layout({ onLogout, theme, onThemeChange, admin }) {
 
   // The page name shown in the top bar.
   const current = allItems.find(([, path]) => path === pathname);
-  const pageName = current ? current[0] : "ParkWise Admin";
+  const pageName = current ? current[0] : "Intelligent Parking Management System";
 
   const name = admin?.full_name || "Administrator";
   const initials =
@@ -82,7 +82,7 @@ export default function Layout({ onLogout, theme, onThemeChange, admin }) {
         <div className="brand">
           <span className="brand-mark">P</span>
           <span>
-            <b>ParkWise</b>
+            <b>Intelligent Parking Management System</b>
             <small>ADMIN PORTAL</small>
           </span>
         </div>
