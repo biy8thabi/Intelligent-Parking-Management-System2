@@ -1,7 +1,11 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const supabase = require('../config/supabaseClient');
-const { validatePassword, validateFullName } = require('../utils/validators');
+const {
+  validatePassword,
+  validateFullName,
+  validateSouthAfricanPhone,
+} = require('../utils/validators');
 
 const SALT_ROUNDS = 10;
 
@@ -29,6 +33,14 @@ async function registerUser(req, res) {
       return res.status(400).json({ error: passwordError });
     }
 
+    const phoneCheck = validateSouthAfricanPhone(phone_number);
+
+if (phoneCheck.error) {
+  return res.status(400).json({
+    error: phoneCheck.error,
+  });
+}
+
     const { data: existing } = await supabase
       .from('users')
       .select('id')
@@ -43,7 +55,12 @@ async function registerUser(req, res) {
 
     const { data: newUser, error } = await supabase
       .from('users')
-      .insert([{ full_name: nameCheck.name, email, password_hash, phone_number }])
+      .insert([{
+  full_name: nameCheck.name,
+  email,
+  password_hash,
+  phone_number: phoneCheck.phone,
+}])
       .select('id, full_name, email, phone_number, created_at')
       .single();
 
@@ -217,7 +234,7 @@ async function forgotPassword(req, res) {
 }
 
 // PUT /api/auth/change-password   (requires auth, drivers and admins)
-// Body: { current_password, new_password }
+// Body: { "current_password":"", "new_password":"" }
 
 async function changePassword(req, res) {
   try {
