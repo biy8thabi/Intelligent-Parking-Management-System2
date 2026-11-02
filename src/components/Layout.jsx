@@ -1,168 +1,144 @@
-import { NavLink, Outlet } from "react-router-dom";
-
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import {
   FiGrid,
-  FiMapPin,
+  FiClock,
   FiMap,
   FiUsers,
+  FiBarChart2,
+  FiDollarSign,
+  FiFileText,
+  FiLayers,
+  FiKey,
+  FiTag,
   FiTruck,
-  FiCalendar,
-  FiCreditCard,
-  FiGrid as FiTicket,
   FiSettings,
   FiUser,
   FiLogOut,
   FiSun,
   FiMoon,
-  FiBell,
-  FiSearch,
-  FiDollarSign,
-  FiBarChart2,
 } from "react-icons/fi";
 
-const items = [
-  ["Dashboard", "/", FiGrid],
-  ["Active Sessions", "/active-sessions", FiCalendar],
-  ["Reports", "/reports", FiBarChart2],
-  ["Parking Lots", "/parking-lots", FiMapPin],
-  ["Parking Slots", "/parking-slots", FiMap],
-  ["Drivers", "/drivers", FiUsers],
-  ["Vehicles", "/vehicles", FiTruck],
-  ["Bookings", "/bookings", FiCalendar],
-  ["Payments", "/payments", FiCreditCard],
-  ["QR Tickets", "/qr-tickets", FiTicket],
-  ["Fee Calculator", "/fee-calculator", FiDollarSign],
-  ["Settings", "/settings", FiSettings],
-  ["Admin Profile", "/admin-profile", FiUser],
+// The sidebar menu, grouped so related pages sit together.
+const groups = [
+  {
+    label: "OVERVIEW",
+    items: [["Dashboard", "/", FiGrid]],
+  },
+  {
+    label: "OPERATIONS",
+    items: [
+      ["Active Sessions", "/sessions", FiClock],
+      ["Session History", "/history", FiFileText],
+      ["Available Bays", "/available-bays", FiMap],
+      ["Parking Spaces", "/parking-spaces", FiLayers],
+      ["Tickets", "/tickets", FiTag],
+    ],
+  },
+  {
+    label: "PEOPLE AND VEHICLES",
+    items: [
+      ["Drivers", "/drivers", FiUsers],
+      ["Vehicles", "/vehicles", FiTruck],
+      ["Password Requests", "/password-requests", FiKey],
+    ],
+  },
+  {
+    label: "INSIGHTS",
+    items: [
+      ["Reports", "/reports", FiBarChart2],
+      ["Fee Calculator", "/fee-calculator", FiDollarSign],
+    ],
+  },
+  {
+    label: "ACCOUNT",
+    items: [
+      ["Settings", "/settings", FiSettings],
+      ["Admin Profile", "/admin-profile", FiUser],
+    ],
+  },
 ];
 
-export default function Layout({
-  onLogout,
-  theme,
-  onThemeChange,
-  admin,
-}) {
+const allItems = groups.flatMap((g) => g.items);
+
+export default function Layout({ onLogout, theme, onThemeChange, admin }) {
+  const { pathname } = useLocation();
+
+  // The page name shown in the top bar.
+  const current = allItems.find(([, path]) => path === pathname);
+  const pageName = current ? current[0] : "ParkWise Admin";
+
+  const name = admin?.full_name || "Administrator";
+  const initials =
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((word) => word[0].toUpperCase())
+      .join("") || "AD";
+
   return (
     <div className="shell">
-      <aside className="side">
+      <aside className="sidebar">
         <div className="brand">
           <span className="brand-mark">P</span>
-
           <span>
             <b>ParkWise</b>
             <small>ADMIN PORTAL</small>
           </span>
         </div>
 
-        <div className="nav-label">WORKSPACE</div>
-
-        <nav>
-          {items.map(([name, path, Icon]) => (
-            <NavLink
-              key={name}
-              to={path}
-              end={name === "Dashboard"}
-            >
-              <Icon />
-              <span>{name}</span>
-
-              {name === "Settings" && (
-                <span className="nav-dot" />
-              )}
-            </NavLink>
+        <nav className="nav" aria-label="Main menu">
+          {groups.map((group) => (
+            <div className="nav-group" key={group.label}>
+              <span className="nav-label">{group.label}</span>
+              {group.items.map(([label, path, Icon]) => (
+                <NavLink
+                  key={path}
+                  to={path}
+                  end={path === "/"}
+                  className={({ isActive }) => (isActive ? "active" : "")}
+                >
+                  <Icon aria-hidden="true" />
+                  <span>{label}</span>
+                </NavLink>
+              ))}
+            </div>
           ))}
         </nav>
 
-        <div className="side-bottom">
-          <div className="side-promo">
-            <div className="promo-orb">✦</div>
-
-            <b>
-              Smart parking.
-              <br />
-              Better tomorrow.
-            </b>
-
-            <small>
-              Manage your facility with confidence.
-            </small>
-          </div>
-
-          <button
-            className="logout"
-            type="button"
-            onClick={onLogout}
-          >
-            <FiLogOut />
-            Sign out
-          </button>
-        </div>
+        <button className="signout" type="button" onClick={onLogout}>
+          <FiLogOut aria-hidden="true" />
+          Sign out
+        </button>
       </aside>
 
-      <main className="main-area">
+      <div className="main">
         <header className="topbar">
-          <div className="top-search">
-            <FiSearch />
+          <strong>{pageName}</strong>
 
-            <input
-              placeholder="Search your workspace..."
-              aria-label="Search your workspace"
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  window.dispatchEvent(
-                    new CustomEvent("pw-search", {
-                      detail: event.target.value,
-                    })
-                  );
-                }
-              }}
-            />
-          </div>
-
-          <div className="top-actions">
+          <div className="top-right">
             <button
-              className="icon-button"
+              className="icon-btn"
               type="button"
-              title="Toggle theme"
-              aria-label="Toggle theme"
-              onClick={() =>
-                onThemeChange(
-                  theme === "dark" ? "light" : "dark"
-                )
-              }
+              title="Switch light or dark theme"
+              aria-label="Switch light or dark theme"
+              onClick={() => onThemeChange(theme === "dark" ? "light" : "dark")}
             >
               {theme === "dark" ? <FiSun /> : <FiMoon />}
             </button>
 
-            <button
-              className="icon-button notification-button"
-              type="button"
-              title="Notifications"
-              aria-label="Open notification settings"
-              onClick={() => {
-                window.location.href = "/settings";
-              }}
-            >
-              <FiBell />
-              <i />
-            </button>
-
-            <div className="user-chip">
-              <div className="avatar">AD</div>
-
-              <span>
-                <b>
-                  {admin?.full_name || "Administrator"}
-                </b>
-
-                <small>System Admin</small>
-              </span>
+            <div className="user">
+              <div className="avatar">{initials}</div>
+              <div>
+                <div className="user-name">{name}</div>
+                <div className="user-role">Administrator</div>
+              </div>
             </div>
           </div>
         </header>
 
         <Outlet />
-      </main>
+      </div>
     </div>
   );
 }

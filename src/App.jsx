@@ -1,68 +1,84 @@
-
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from "react";
 import {
   BrowserRouter,
   Navigate,
+  Outlet,
   Route,
   Routes,
   useLocation,
-} from 'react-router-dom';
+  useNavigate,
+} from "react-router-dom";
 
-import Layout from './components/Layout';
-import Login from './pages/Login';
-import Dashboard from './pages/Dashboard';
-import Sessions from './pages/Sessions';
-import CrudPage from './pages/CrudPage';
-import FeeCalculator from './pages/FeeCalculator';
-import Reports from './pages/Reports';
-import Settings from './pages/Settings';
-import { request } from './services/api';
+import Layout from "./components/Layout";
+import Login from "./pages/Login";
+import Dashboard from "./pages/Dashboard";
+import Sessions from "./pages/Sessions";
+import FeeCalculator from "./pages/FeeCalculator";
+import Reports from "./pages/Reports";
+import Settings from "./pages/Settings";
+import AdminProfile from "./pages/AdminProfile";
+import Drivers from "./pages/Drivers";
+import AvailableBays from "./pages/AvailableBays";
+import SessionHistory from "./pages/SessionHistory";
+import ParkingSpaces from "./pages/ParkingSpaces";
+import Tickets from "./pages/Tickets";
+import Vehicles from "./pages/Vehicles";
+import PasswordRequests from "./pages/PasswordRequests";
+import { request } from "./services/api";
+import {
+  clearToken,
+  getStoredTheme,
+  getToken,
+  setToken,
+  storeTheme,
+} from "./auth";
 
-const TOKEN_KEY = 'pw_admin_token';
-
-function ProtectedLayout({ onLogout, theme, onThemeChange }) {
+// Checks the stored token with the backend once, then renders the portal.
+function ProtectedLayout({ admin, onAdmin, theme, onThemeChange, onLogout }) {
   const location = useLocation();
-  const [checking, setChecking] = useState(true);
-  const [authenticated, setAuthenticated] = useState(false);
-  const [error, setError] = useState('');
-
-  const verifySession = useCallback(async () => {
-    const token = sessionStorage.getItem(TOKEN_KEY);
-
-    if (!token) {
-      setAuthenticated(false);
-      setChecking(false);
-      return;
-    }
-
-    setChecking(true);
-    setError('');
-
-    try {
-      await request('/api/auth/me', { token });
-      setAuthenticated(true);
-    } catch (err) {
-      sessionStorage.removeItem(TOKEN_KEY);
-      setAuthenticated(false);
-      setError(err.message || 'Please sign in again.');
-    } finally {
-      setChecking(false);
-    }
-  }, []);
+  const [checking, setChecking] = useState(!admin);
+  const [error, setError] = useState("");
+  const token = getToken();
 
   useEffect(() => {
-    verifySession();
-  }, [verifySession, location.pathname]);
+    if (admin || !token) {
+      setChecking(false);
+      return undefined;
+    }
+
+    let active = true;
+
+    request("/api/auth/me", { token })
+      .then((data) => {
+        if (!active) return;
+        onAdmin(data?.admin ?? data?.user ?? {});
+      })
+      .catch((err) => {
+        if (!active) return;
+        // Only drop the session when the server actually rejected it.
+        if (err.status === 401 || err.status === 403) {
+          clearToken();
+        }
+        setError(err.message || "Please sign in again.");
+      })
+      .finally(() => {
+        if (active) setChecking(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [admin, token, onAdmin]);
 
   if (checking) {
     return (
       <main className="page">
-        <p role="status">Checking administrator session…</p>
+        <p role="status">Checking administrator session...</p>
       </main>
     );
   }
 
-  if (!authenticated) {
+  if (!getToken()) {
     return (
       <Navigate
         to="/login"
@@ -72,79 +88,103 @@ function ProtectedLayout({ onLogout, theme, onThemeChange }) {
     );
   }
 
-  return <Layout onLogout={onLogout} theme={theme} onThemeChange={onThemeChange} />;
+  if (error && !admin) {
+    return (
+      <main className="page">
+        <p role="alert" className="notice error">
+          {error}
+        </p>
+        <button type="button" className="btn btn-primary" onClick={() => window.location.reload()}>
+          Try again
+        </button>
+      </main>
+    );
+  }
+
+  return (
+    <Layout
+      admin={admin}
+      theme={theme}
+      onThemeChange={onThemeChange}
+      onLogout={onLogout}
+    />
+  );
 }
 
 function AppRoutes() {
-  const [loginVersion, setLoginVersion] = useState(0);
-  const [theme, setTheme] = useState(() => localStorage.getItem('pw_theme') || 'dark');
+  const navigate = useNavigate();
+  const [admin, setAdmin] = useState(null);
+  const [theme, setTheme] = useState(getStoredTheme);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    localStorage.setItem('pw_theme', theme);
+    document.documentElement.setAttribute("data-theme", theme);
+    storeTheme(theme);
   }, [theme]);
 
   const logout = useCallback(() => {
-    sessionStorage.removeItem(TOKEN_KEY);
-    setLoginVersion(version => version + 1);
-    window.location.replace('/login');
-  }, []);
+    clearToken();
+    setAdmin(null);
+    navigate("/login", { replace: true });
+  }, [navigate]);
+
+  const handleLogin = useCallback(
+    (token, adminData, redirectTo = "/") => {
+      setToken(token);
+      setAdmin(adminData ?? null);
+      navigate(redirectTo, { replace: true });
+    },
+    [navigate]
+  );
+
+  // Pages that need the token get it here, so they never read storage themselves.
+  const token = getToken();
 
   return (
     <Routes>
+      <Route path="/login" element={<Login onLogin={handleLogin} />} />
+
       <Route
-        path="/login"
         element={
-          <Login
-            key={loginVersion}
-            onLogin={(token) => {
-              sessionStorage.setItem(TOKEN_KEY, token);
-              window.location.replace('/dashboard');
-            }}
+          <ProtectedLayout
+            admin={admin}
+            onAdmin={setAdmin}
+            theme={theme}
+            onThemeChange={setTheme}
+            onLogout={logout}
           />
         }
-      />
-
-      <Route
-        element={<ProtectedLayout onLogout={logout} theme={theme} onThemeChange={setTheme} />}
       >
-        <Route index element={<Dashboard />} />
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/sessions" element={<Sessions token={sessionStorage.getItem(TOKEN_KEY)} onUnauthorised={logout} />} />
-        <Route path="/active-sessions" element={<Sessions token={sessionStorage.getItem(TOKEN_KEY)} onUnauthorised={logout} />} />
-
         <Route
-          path="/parking-lots"
-          element={<CrudPage title="Parking Lots" />}
+          index
+          element={<Dashboard token={token} onUnauthorised={logout} />}
         />
         <Route
-          path="/parking-slots"
-          element={<CrudPage title="Parking Slots" />}
+          path="/dashboard"
+          element={<Dashboard token={token} onUnauthorised={logout} />}
         />
         <Route
-          path="/bookings"
-          element={<CrudPage title="Bookings" />}
+          path="/sessions"
+          element={<Sessions token={token} onUnauthorised={logout} />}
         />
+        <Route path="/active-sessions" element={<Navigate to="/sessions" replace />} />
         <Route
-          path="/drivers"
-          element={<CrudPage title="Drivers" />}
-        />
-        <Route
-          path="/vehicles"
-          element={<CrudPage title="Vehicles" />}
-        />
-        <Route
-          path="/payments"
-          element={<CrudPage title="Payments" />}
-        />
-        <Route
-          path="/qr-tickets"
-          element={<CrudPage title="QR Tickets" />}
+          path="/reports"
+          element={<Reports token={token} onUnauthorised={logout} />}
         />
 
+        <Route path="/history" element={<SessionHistory token={token} onUnauthorised={logout} />} />
+        <Route path="/drivers" element={<Drivers token={token} onUnauthorised={logout} />} />
+        <Route path="/vehicles" element={<Vehicles token={token} onUnauthorised={logout} />} />
+        <Route path="/password-requests" element={<PasswordRequests token={token} onUnauthorised={logout} />} />
+        <Route path="/parking-spaces" element={<ParkingSpaces token={token} onUnauthorised={logout} />} />
+        <Route path="/tickets" element={<Tickets token={token} onUnauthorised={logout} />} />
+        <Route path="/available-bays" element={<AvailableBays />} />
         <Route path="/fee-calculator" element={<FeeCalculator />} />
-        <Route path="/reports" element={<Reports token={sessionStorage.getItem(TOKEN_KEY)} onUnauthorised={logout} />} />
-        <Route path="/settings" element={<Settings theme={theme} onThemeChange={setTheme} />} />
+        <Route
+          path="/settings"
+          element={<Settings theme={theme} onThemeChange={setTheme} token={token} onUnauthorised={logout} />}
+        />
+        <Route path="/admin-profile" element={<AdminProfile admin={admin} />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
