@@ -1,4 +1,4 @@
-/* ParkWise Admin - simple, plain styling.
+/* Intelligent Parking Management System admin - simple, plain styling.
    Sections: 1 tokens, 2 base, 3 app shell, 4 page pieces, 5 login, 6 responsive */
 
 /* 1. Colour tokens (unchanged colours) */
@@ -74,7 +74,7 @@ button:disabled { cursor: not-allowed; opacity: 0.6; }
   background: var(--purple2); color: #fff; font-weight: 700;
   display: flex; align-items: center; justify-content: center;
 }
-.brand b { display: block; font-size: 16px; }
+.brand b { display: block; font-size: 13px; line-height: 1.25; }
 .brand small { color: var(--muted); font-size: 11px; letter-spacing: 1px; }
 
 .nav { display: flex; flex-direction: column; gap: 14px; flex: 1; }
