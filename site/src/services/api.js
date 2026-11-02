@@ -43,7 +43,7 @@ export async function request(path, options = {}) {
   } catch (err) {
     if (err?.name === 'AbortError') throw err;
     throw new Error(
-      'Cannot connect to the ParkWise server. Check your internet connection. If the server was idle it may take up to a minute to wake up, so try again shortly.'
+      'Cannot connect to the server. Check your internet connection. If the server was idle it may take up to a minute to wake up, so try again shortly.'
     );
   }
 
@@ -58,7 +58,7 @@ export async function request(path, options = {}) {
     try {
       data = await response.json();
     } catch {
-      throw new Error('The ParkWise server returned invalid JSON.');
+      throw new Error('The server returned invalid JSON.');
     }
   } else {
     const responseText = await response.text();
