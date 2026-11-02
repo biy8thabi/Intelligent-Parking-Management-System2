@@ -161,7 +161,7 @@ export default function Sessions({ token, onUnauthorised, embedded = false }) {
 
   return (
     <div className="page">
-      <PageHead title="Active Parking Sessions" subtitle="Live data from the ParkWise backend. Updates automatically.">
+      <PageHead title="Active Parking Sessions" subtitle="Live data from the backend. Updates automatically.">
         {refreshButton}
       </PageHead>
       <Card>{table}</Card>
