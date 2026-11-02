@@ -32,7 +32,7 @@ export function formatMoney(value) {
   return `R${Number(value || 0).toFixed(2)}`;
 }
 
-// The ParkWise fee rule: R10 per hour, minimum one minute.
+// The parking fee rule: R10 per hour, minimum one minute.
 export const RATE_PER_HOUR = 10;
 export function estimateFee(minutes) {
   const billable = Math.max(1, Math.round(minutes));
