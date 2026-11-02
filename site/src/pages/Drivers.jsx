@@ -54,7 +54,7 @@ export default function Drivers({ token, onUnauthorised }) {
 
   return (
     <div className="page">
-      <PageHead title="Drivers" subtitle="People who have registered with ParkWise." />
+      <PageHead title="Drivers" subtitle="People who have registered with the system." />
 
       {error && <Notice kind="error">{error}</Notice>}
 
