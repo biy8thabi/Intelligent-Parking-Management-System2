@@ -145,8 +145,8 @@ export default function Vehicles({ token, onUnauthorised }) {
   }
 
   function exportCSV() {
-    downloadCSV(`parkwise-vehicles-${localDate()}.csv`, [
-      ["ParkWise Vehicle Register"],
+    downloadCSV(`ipms-vehicles-${localDate()}.csv`, [
+      ["Intelligent Parking Management System - Vehicle Register"],
       ["Generated", new Date().toLocaleString("en-ZA")],
       [],
       ["Registration", "Make", "Model", "Colour", "Owner", "Owner email", "Added"],
