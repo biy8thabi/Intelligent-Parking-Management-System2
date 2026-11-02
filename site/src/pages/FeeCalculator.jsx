@@ -32,7 +32,7 @@ export default function FeeCalculator() {
 
   return (
     <div className="page">
-      <PageHead title="Parking Fee Calculator" subtitle="Calculate parking fees using the ParkWise rate." />
+      <PageHead title="Parking Fee Calculator" subtitle="Calculate parking fees using the standard rate." />
 
       <Card title="Parking duration">
         <div className="form-row">
