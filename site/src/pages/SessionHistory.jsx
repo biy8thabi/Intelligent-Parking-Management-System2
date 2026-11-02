@@ -46,8 +46,8 @@ export default function SessionHistory({ token, onUnauthorised }) {
   const feesCharged = completed.reduce((sum, s) => sum + Number(s.fee_amount || 0), 0);
 
   function exportCSV() {
-    downloadCSV(`parkwise-session-history-${localDate()}.csv`, [
-      ["ParkWise Session History"],
+    downloadCSV(`ipms-session-history-${localDate()}.csv`, [
+      ["Intelligent Parking Management System - Session History"],
       ["Generated", new Date().toLocaleString("en-ZA")],
       [],
       ["Vehicle", "Driver", "Email", "Bay", "Entered", "Exited", "Duration", "Fee (R)", "Status"],
